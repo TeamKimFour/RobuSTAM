@@ -24,6 +24,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest
 
+      - name: 빌드 검사 (import 에러 확인)
+        run: |
+          python -m compileall . -q
+
       - name: 테스트 실행
         run: |
-          pytest --tb=short || echo "테스트 파일 없음, CI 통과"
+          pytest tests/ -v
