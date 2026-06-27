@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [ dev ]
+  pull_request:
+    branches: [ dev ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v3
+
+      - name: Python 설치
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+
+      - name: 빌드 검사 (import 에러 확인)
+        run: |
+          python -m compileall . -q
+
+      - name: 테스트 실행
+        run: |
+          pytest tests/ -v
