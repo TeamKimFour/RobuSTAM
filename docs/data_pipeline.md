@@ -18,7 +18,7 @@
 | walk-forward 분할 | `src/data/splits.py` | ⏳ 2주차 |
 | z-score 정규화 | `src/data/normalize.py` | ⏳ 2주차 |
 | 187차원 조립 | `src/data/assemble.py` | ⏳ 2주차 |
-| Feature Store 출력 | `src/data/feature_store.py` | ⏳ 2주차 |
+| Feature Store 입출력 | `src/data/feature_store.py` | ✅ I/O 구현 (실데이터 2주차) |
 
 ---
 
@@ -52,6 +52,39 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
 - **`collect.py`** — yfinance 조정종가 수집, 공통 거래일 교집합 정렬(`_align`), Parquet 캐시.
   `python -m src.data.collect`로 실행.
 - **`returns.py`** — `log_returns`(첫 행 drop), `return_window(t, W)`(t 포함, 미래 미포함).
+- **`feature_store.py`** — 가공된 187차원 피처의 저장·조회. Parquet 파티션 입출력
+  (`write_features / load_features / partition_path`) + SQLite 메타
+  (`init_meta_db / write_run / write_feature_columns / write_fold / read_*`). I/O 골격 구현 완료,
+  실데이터는 2주차 지표·정규화 후 채움.
+
+---
+
+## 3-1. 저장소(Feature Store) 설계
+
+가공된 187차원 피처를 모델 학습·추론에 공급하기 위한 저장 계층. 두 부분으로 구성한다.
+
+### Parquet — 피처 행렬 (wide 포맷)
+```
+data/feature_store/fold=<id>/split=<train|valid|test>/part.parquet
+```
+- **wide 채택**: State는 고정 187차원 밀집 행렬이라 long(녹는) 포맷은 행수 187배 + 조인 비용.
+  wide(date 인덱스 + 187개 피처 컬럼)가 학습 로더에 직접 매핑되어 유리.
+- 컬럼명은 `schema.feature_names(W)` 그대로 사용(`ret_SPY_lag0` … `prevw_SHV`) → 자기설명·차원 검증 용이.
+- **fold/split 파티션**: walk-forward 학습의 자연 접근 단위("Fold1의 train만 로드").
+
+### SQLite — 메타DB (`data/feature_store/meta.sqlite`)
+데이터 산출물은 `.gitignore`(`/data/`)되므로, "어떤 config·통계로 만들어졌나"의 **감사 기록**이자
+추론(도현) 재사용 근거. 테이블:
+
+| 테이블 | 내용 | 채우는 시점 |
+|---|---|---|
+| `runs` | config 스냅샷(W·state_dim·자산순서·config_hash) | 1주차 |
+| `feature_columns` | 187개 컬럼명·인덱스 (차원 감사) | 1주차 |
+| `folds` | 각 fold train/valid/test 날짜 경계·embargo | 2주차(splits) |
+| `scaler_stats` | 정규화 평균·표준편차 (추론 재사용) | 2주차(normalize) |
+
+> 데이터 소스는 **yfinance 단일**이다. 초기 기획서의 KRX·FinRL은 저장소 문서(CLAUDE.md 스택·state_spec)에
+> 없고, 고정 US ETF 유니버스 5종이 모두 yfinance로 커버되므로 채택하지 않는다.
 
 ---
 

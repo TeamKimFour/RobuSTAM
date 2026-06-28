@@ -47,6 +47,7 @@ src/
     schema.py           # 187차원 State 인덱스맵(코드측 SSOT)
     collect.py          # yfinance 수집
     returns.py          # 로그수익률·윈도우
+    feature_store.py    # Feature Store 입출력 (Parquet 파티션 + SQLite 메타)
 tests/                  # 차원·인덱스맵·룩어헤드 회귀 테스트
 docs/                   # state_spec.md(State SSOT), data_pipeline.md
 ```
