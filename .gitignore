@@ -1,0 +1,122 @@
+# ─────────────────────────────────────────────
+# RobuSTAM .gitignore
+# ─────────────────────────────────────────────
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ===== 가상환경 =====
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.python-version
+
+# ===== 환경변수 / 시크릿 =====
+.env
+.env.*
+!.env.example
+*.pem
+secrets.yaml
+
+# ===== 데이터 산출물 (CLAUDE.md §7) =====
+data/
+!data/.gitkeep
+*.parquet
+*.feather
+*.arrow
+*.db
+*.sqlite
+*.sqlite3
+*.csv
+!config/**/*.csv
+
+# ===== ML 실험 추적 =====
+mlruns/
+mlflow.db
+wandb/
+*.pth
+*.pt
+*.ckpt
+*.onnx
+checkpoints/
+models/checkpoints/
+artifacts/
+
+# ===== Jupyter Notebook =====
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+profile_default/
+ipython_config.py
+
+# ===== 테스트 / 커버리지 =====
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# ===== 타입체커 / 린터 캐시 =====
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.pyre/
+.pytype/
+
+# ===== Docker =====
+*.log
+docker/.env
+
+# ===== Frontend (Vercel / Node) =====
+node_modules/
+.next/
+.vercel/
+*.local
+
+# ===== IDE / 에디터 =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# ===== OS =====
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ===== Claude Code =====
+.claude/
