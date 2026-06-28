@@ -93,8 +93,8 @@ warm-up 등)가 NaN으로 잘려도 2010-01 목표 구간이 보존되도록.
 ## 6. 실행·검증
 
 ```bash
-# 1) 가상환경 (Python 3.11 — CI와 동일)
-python3.11 -m venv .venv && source .venv/bin/activate
+# 1) 가상환경 (Python 3.12 — CI와 동일)
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 # 2) 원시 데이터 수집 → data/raw/prices_raw.parquet

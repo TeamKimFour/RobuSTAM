@@ -11,11 +11,11 @@
 
 ## 개발 환경 셋업
 
-Python **3.11** 기준(CI와 동일 버전).
+Python **3.12** 기준(CI와 동일 버전).
 
 ```bash
 # 가상환경 생성·활성화
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 
 # 의존성 설치
