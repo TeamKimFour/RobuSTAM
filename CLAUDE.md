@@ -69,28 +69,9 @@
 ### 5-1. 브랜치 전략
 - **`main`** — 최종 배포용. **직접 push 절대 금지.**
 - **`dev`** — 4명 코드 통합 브랜치. 기본(Default) 브랜치. **직접 push 금지(PR로만 병합).**
-- **개인 작업 브랜치** — `dev`에서 분기. 명명: `<type>/#<이슈번호>-<설명>` 예) `feat/#1-email-auth`
+- **개인 작업 브랜치** — `dev`에서 분기. 명명: `<type>/<설명>` 예) `feat/email-auth`
 
-### 5-2. 일일 개발 루틴
-```bash
-# ① 작업 시작 전 최신화
-git checkout dev
-git pull origin dev
-
-# ② 내 작업 브랜치 생성 (이슈 번호 기준)
-git checkout -b feat/#1-email-auth
-
-# ③ 코딩 후 커밋 (커밋 규칙 §5-3 준수)
-git add .
-git commit -m "feat: 인증번호 저장 로직 구현"
-
-# ④ 내 브랜치로 push (절대 dev/main에 직접 push 금지)
-git push origin feat/#1-email-auth
-
-# ⑤ GitHub에서 PR 생성 → 팀원 1명 리뷰 후 dev로 Merge
-```
-
-### 5-3. 커밋 메시지 규칙
+### 5-2. 커밋 메시지 규칙
 
 **타입(Type)**
 
@@ -115,7 +96,7 @@ git push origin feat/#1-email-auth
 6. 한 커밋에는 최대한 하나의 작업만 담는다.
 7. (본문이 길면) 각 줄은 적절히 줄바꿈해 가독성을 유지한다.
 
-### 5-4. 금지 사항 ⛔
+### 5-3. 금지 사항 ⛔
 - `git push --force` 등 **강제 명령어 사용 금지.**
 - `main` · `dev`에 **직접 push 금지** (반드시 개인 브랜치 → PR).
 
@@ -127,7 +108,7 @@ git push origin feat/#1-email-auth
 - 커밋 메시지에 **`Co-Authored-By: Claude ...` 라인을 절대 추가하지 않는다.**
 - 커밋·PR 본문에 **"Generated with Claude Code", "🤖", Claude 관련 서명/푸터를 넣지 않는다.**
 - PR 설명은 사람이 작성한 것처럼 프로젝트 내용만 담는다.
-- 커밋 메시지는 위 §5-3 규칙(타입·한국어·50자·명령문)만 따른다.
+- 커밋 메시지는 위 §5-2 규칙(타입·한국어·50자·명령문)만 따른다.
 
 ### 6-2. 작업 규칙
 - 명시적 요청이 있을 때만 커밋·push·PR을 수행한다.
@@ -135,6 +116,10 @@ git push origin feat/#1-email-auth
 - `--force` 및 히스토리 재작성 금지.
 - 응답·문서·커밋은 **한국어**로 작성한다.
 - State 차원, 자산 순서, 거래비용 등 §2 핵심 규칙은 임의 변경하지 않는다(변경 시 회의 합의 필요).
+- **코드·구조·결정을 변경하면 관련 문서를 같은 PR에서 함께 갱신한다.** 인터페이스·차원·핵심 규칙이
+  바뀌면 해당 SSOT 문서(`docs/state_spec.md`, `config/config.yaml`)를 **우선** 갱신하고 코드를 맞춘다.
+  새 모듈·파이프라인은 `docs/`에 설계 기록을 남기고, 사용법 변화는 `README.md`에 반영한다.
+  문서 갱신 없는 코드 변경 PR은 미완성으로 본다.
 
 ---
 
