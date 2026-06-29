@@ -14,7 +14,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/lib/
 lib64/
 parts/
 sdist/
@@ -42,8 +42,9 @@ venv.bak/
 secrets.yaml
 
 # ===== 데이터 산출물 (CLAUDE.md §7) =====
-data/
-!data/.gitkeep
+# 루트의 data/ 산출물만 무시 (src/data/ 소스 패키지는 추적해야 하므로 앵커)
+/data/
+!/data/.gitkeep
 *.parquet
 *.feather
 *.arrow

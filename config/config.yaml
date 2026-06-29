@@ -1,0 +1,62 @@
+# RobuSTAM 설정 — 단일 진실 공급원(SSOT)
+# W·자산순서·거래비용 등 핵심값은 여기서만 정의하고, 모든 코드가 여기서 읽는다.
+# docs/state_spec.md(State 명세)와 항상 일치해야 하며, 충돌 시 state_spec.md가 우선한다.
+
+# ── 자산 유니버스 (순서 고정, 절대 변경 금지 — CLAUDE.md §2) ──
+# SPY: 미국주식 / EWY: 한국주식ETF / TLT: 미국장기채 / GLD: 금 / SHV: 초단기채(현금성)
+assets: ["SPY", "EWY", "TLT", "GLD", "SHV"]
+
+# ── State 차원 산출용 핵심 하이퍼파라미터 ──
+window: 30              # W — 로그수익률 history 윈도우. state_dim = (5×W)+37 → 187 (하드코딩 금지)
+
+# ── 거래비용 (env·backtest 공용) ──
+transaction_cost: 0.001  # 편도 0.1% (CLAUDE.md §2 확정값)
+
+# ── 데이터 수집 ──
+data:
+  start: "2009-10-01"    # 2010 목표구간의 지표 warm-up을 위해 약 60거래일 앞당겨 다운로드
+  end: "2025-12-31"
+  warmup_buffer_days: 60
+  raw_dir: "data/raw"
+  feature_store_dir: "data/feature_store"
+  meta_db: "data/feature_store/meta.sqlite"
+
+# ── 피처 정의 (2주차 구현 — 이번 주엔 명세만 기록) ──
+# 자산별 6개 + 시장공통 2개. 순서는 docs/state_spec.md 인덱스맵과 일치해야 함.
+features:
+  asset:
+    ["MA_Cross_5_20", "RSI_14", "MACD_Hist", "Rolling_Vol_20", "Bollinger_Band_Width", "ROC_10"]
+  market:
+    ["Equity_Bond_Ratio", "Gold_Vol_Ratio"]
+  params:
+    sma_fast: 5
+    sma_slow: 20
+    rsi_length: 14
+    macd: [12, 26, 9]      # [fast, slow, signal]
+    vol_window: 20
+    bbands: [20, 2]        # [length, std]
+    roc_length: 10
+    annualize_vol: false
+
+# ── walk-forward 분할 (Expanding 방식 — 구현은 2주차) ──
+# train을 2010부터 누적, test 블록을 2년 단위로 전진. fold마다 정규화 통계를 재fit한다.
+#   Fold1: train 2010–2019 → test 2020–2021
+#   Fold2: train 2010–2021 → test 2022–2023
+#   Fold3: train 2010–2023 → test 2024–2025
+split:
+  mode: "expanding"
+  anchor_start: "2010-01-01"
+  test_blocks:
+    - ["2020-01-01", "2021-12-31"]
+    - ["2022-01-01", "2023-12-31"]
+    - ["2024-01-01", "2025-12-31"]
+  valid_days: 252         # 각 fold train 꼬리 약 1년을 validation으로 분리
+  embargo_days: 34        # train 끝↔test 시작 사이 갭(≥ 최장 지표 lookback, MACD ~34) — 누수 차단
+
+# ── 정규화 (2주차 구현) ──
+# z-score 표준화. 통계량(평균·표준편차)은 각 fold 학습구간에서만 fit, 검증·테스트엔 적용만(룩어헤드 방지).
+normalize:
+  method: "zscore"
+  returns_scope: "per_asset"    # 수익률 150칸은 자산당 단일 평균·표준편차로 정규화
+  feature_scope: "per_column"   # 지표·시장 칸은 컬럼별로 정규화
+  eps: 1.0e-8                    # 표준편차 0 가드(SHV 등 상수 컬럼)
