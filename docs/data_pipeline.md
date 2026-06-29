@@ -135,9 +135,33 @@ python -m src.data.collect
 
 # 3) 테스트 (차원·인덱스맵·룩어헤드 회귀)
 pytest tests/ -v
+
+# 4) 데이터 품질 검증 (EDA 요약 + 자동 검사)
+python -m src.data.validate
+
+# 5) (선택) EDA 노트북 — 표·차트로 직접 탐색
+pip install -r requirements-dev.txt
+jupyter lab notebooks/eda_raw_prices.ipynb
 ```
 
 현재 수집 결과: **4087 거래일 × 5자산, 결측 0** (2009-10-01 ~ 2025-12-30).
+
+---
+
+## 7. 데이터 품질 검증 · EDA
+
+`src/data/validate.py` — 두 가지를 제공한다.
+- **`summarize_prices(df)`** — EDA 요약(통계·분포·상관·이상치). `notebooks/eda_raw_prices.ipynb`에서
+  Plotly 차트(가격 추이·수익률 분포·상관 히트맵·롤링 변동성)와 함께 시각적으로 탐색.
+- **`validate_prices(df, assets)`** — 자동 품질 게이트: 자산 컬럼·순서, 인덱스 정렬·중복, NaN,
+  가격>0, 극단 일간변동, 최소 행수. 위반 목록 반환. `tests/test_validate.py`로 박제.
+
+### 실데이터 관측 요약 (2009-10-01 ~ 2025-12-30, 4087일)
+- **무결성**: 결측 0, 0이하 가격 0, 극단 이동(|logret|>0.25) 0, 분할 미조정 의심 0 → **모든 검증 통과**.
+  (영업일 대비 갭 152는 16년치 미국 증시 공휴일로 정상.)
+- **연율 변동성**: SPY 17%·EWY 25%·TLT 15%·GLD 16%·**SHV 0.3%**(현금성 확인).
+- **분포**: 주식(SPY/EWY/GLD) 음의 왜도·높은 첨도(SPY 첨도 12) — 폭락 꼬리 위험, 상식과 일치.
+- **상관**: **SPY↔TLT −0.30**(주식-채권 헤지), SPY↔EWY 0.72(주식군), **SHV 무상관**(현금) — 자산 구성 타당.
 
 ---
 
@@ -145,3 +169,4 @@ pytest tests/ -v
 | 버전 | 날짜 | 내용 |
 |---|---|---|
 | v0.1 | 2026-06-28 | 최초 작성. 기반(config·schema)·수집(collect·returns) 구현 반영. |
+| v0.2 | 2026-06-28 | Feature Store 저장소(§3-1), 데이터 품질 검증·EDA(§7) 추가. |

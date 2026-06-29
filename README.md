@@ -37,6 +37,17 @@ python -m src.data.collect
 pytest tests/ -v
 ```
 
+## 데이터 품질 검증 · EDA
+
+```bash
+# 자동 품질 검사 + EDA 요약(통계·상관·이상치)
+python -m src.data.validate
+
+# 표·차트로 직접 탐색하는 노트북 (개발 의존성 필요)
+pip install -r requirements-dev.txt
+jupyter lab notebooks/eda_raw_prices.ipynb
+```
+
 ## 프로젝트 구조 (구현된 부분)
 
 ```

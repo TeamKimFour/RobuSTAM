@@ -1,19 +1,20 @@
 # RobuSTAM 의존성 (Python 3.12 기준 — CI와 로컬 동일)
 # 데이터 엔지니어링 레이어용. RL/서빙 의존성은 추후 별도 추가.
+# 버전 고정(pin): 미고정 시 CI가 비재현적이라 pandas/numpy ABI 충돌(세그폴트) 발생 → 검증된 조합으로 고정.
 
 # 데이터 처리
-pandas
-numpy
-pyarrow          # Parquet 입출력
+pandas==3.0.3
+numpy==2.2.6
+pyarrow==24.0.0      # Parquet 입출력
 
 # 데이터 수집
-yfinance
+yfinance==1.4.1
 
 # 기술적 지표 (2주차 features.py에서 사용 — Python>=3.12 필요)
-pandas-ta
+pandas-ta==0.4.71b0
 
 # 설정
-pyyaml
+pyyaml==6.0.3
 
 # 테스트
-pytest
+pytest==9.1.1

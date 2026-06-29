@@ -121,3 +121,6 @@ Thumbs.db
 
 # ===== Claude Code =====
 .claude/
+
+# EDA 노트북 HTML 내보내기 (생성물)
+notebooks/*.html

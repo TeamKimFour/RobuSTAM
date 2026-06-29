@@ -1,0 +1,8 @@
+# 로컬 개발·EDA 전용 의존성 (CI에는 설치하지 않음 — requirements.txt를 가볍게 유지)
+# 설치: pip install -r requirements.txt -r requirements-dev.txt
+
+-r requirements.txt
+
+notebook        # Jupyter — EDA 노트북 실행
+plotly          # 인터랙티브 차트 (가격·수익률·상관)
+nbconvert       # 노트북 헤드리스 실행/검증
