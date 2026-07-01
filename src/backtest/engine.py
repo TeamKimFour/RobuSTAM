@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+from src.config_loader import load_config, get_transaction_cost
+
 
 class BacktestEngine:
     """
@@ -10,16 +12,16 @@ class BacktestEngine:
     - 수수료를 차감하는 시뮬레이터
     """
 
-    def __init__(self, initial_nav: float = 1_000_000, transaction_cost: float = 0.001):
+    def __init__(self, initial_nav: float = 1_000_000, config_path: str = "config/config.yaml"):
         """
         Parameters
         ----------
-        initial_nav      : 초기 총자산 (기본값 100만원)
-        transaction_cost : 편도 거래 비용률 (기본값 0.1% = 0.001)
-                           팀 확정 전까지 가변 파라미터로 유지
+        initial_nav  : 초기 총자산 (기본값 100만원)
+        config_path  : config.yaml 경로
         """
         self.initial_nav = initial_nav
-        self.transaction_cost = transaction_cost
+        cfg = load_config(config_path)
+        self.transaction_cost = get_transaction_cost(cfg)
 
     def calc_nav(
         self,
