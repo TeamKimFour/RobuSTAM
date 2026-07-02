@@ -65,6 +65,24 @@ D = (A × W) + (K_asset × A) + K_market + A
 > `Equity_Bond_Ratio`(SPY↔TLT), `Gold_Vol_Ratio`(GLD)는 **시장 전체 단일값**이다.
 > 자산별로 곱하지 말 것 — 이것이 1,355안의 핵심 오류였다.
 
+### 3-1. 지표 산식 (2주차 확정 · 파라미터는 config `features.params`)
+
+모든 지표는 **인과적**(과거만 참조)이며 warm-up NaN은 메우지 않고 drop한다. 파라미터는 `config.yaml`에서 읽는다.
+
+| 지표 | 산식 | 입력 |
+|---|---|---|
+| `MA_Cross_5_20` | `(SMA5 − SMA20) / SMA20` (정규화된 크로스 강도) | 조정종가 |
+| `RSI_14` | `ta.rsi(close, 14)` (Wilder) | 조정종가 |
+| `MACD_Hist` | `ta.macd(close,12,26,9)` 의 히스토그램(`MACDh`) | 조정종가 |
+| `Rolling_Vol_20` | `logret.rolling(20).std()` (연율화 안 함, `annualize_vol=false`) | 로그수익률 |
+| `Bollinger_Band_Width` | `ta.bbands(close,20,2)` 의 밴드폭(`BBB` = (상단−하단)/중앙) | 조정종가 |
+| `ROC_10` | `ta.roc(close, 10)` = `close/close.shift(10) − 1` | 조정종가 |
+| `Equity_Bond_Ratio` | `(SPY/TLT) / (SPY/TLT).rolling(20).mean() − 1` (주식·채권 상대강도의 추세 편차) | SPY·TLT 종가 |
+| `Gold_Vol_Ratio` | `Rolling_Vol_20(GLD) / GLD_logret.rolling(60).std()` (금 단기/장기 변동성 비, 레짐 신호) | GLD 로그수익률 |
+
+> 세 지표(`MA_Cross_5_20`·`Equity_Bond_Ratio`·`Gold_Vol_Ratio`)는 v1.0 명세에 산식이 없었다.
+> 위 산식은 **2주차 제안값**이며 PR 리뷰에서 팀 확정한다(변경 시 본 표를 우선 갱신).
+
 ---
 
 ## 4. 구현 스니펫 (형우·도현 공용)

@@ -37,6 +37,8 @@ features:
     bbands: [20, 2]        # [length, std]
     roc_length: 10
     annualize_vol: false
+    ebr_ma_window: 20      # Equity_Bond_Ratio: SPY/TLT 비율의 이동평균 창
+    gvr_long_window: 60    # Gold_Vol_Ratio: 장기 변동성 창(단기는 vol_window)
 
 # ── walk-forward 분할 (Expanding 방식 — 구현은 2주차) ──
 # train을 2010부터 누적, test 블록을 2년 단위로 전진. fold마다 정규화 통계를 재fit한다.
