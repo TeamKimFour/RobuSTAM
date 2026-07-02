@@ -14,10 +14,10 @@
 | State 인덱스맵 | `src/data/schema.py` | ✅ 구현 |
 | 원시 수집 | `src/data/collect.py` | ✅ 구현 |
 | 로그수익률·윈도우 | `src/data/returns.py` | ✅ 구현 |
-| 기술적 지표 6+2 | `src/data/features.py` | ⏳ 2주차 |
-| walk-forward 분할 | `src/data/splits.py` | ⏳ 2주차 |
-| z-score 정규화 | `src/data/normalize.py` | ⏳ 2주차 |
-| 187차원 조립 | `src/data/assemble.py` | ⏳ 2주차 |
+| 기술적 지표 6+2 | `src/data/features.py` | ✅ 구현 |
+| 187차원 조립 | `src/data/assemble.py` | ✅ 구현 |
+| walk-forward 분할 | `src/data/splits.py` | ⏳ 2주차 (PR-B) |
+| z-score 정규화 | `src/data/normalize.py` | ⏳ 2주차 (PR-B) |
 | Feature Store 입출력 | `src/data/feature_store.py` | ✅ I/O 구현 (실데이터 2주차) |
 
 ---
@@ -52,6 +52,10 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
 - **`collect.py`** — yfinance 조정종가 수집, 공통 거래일 교집합 정렬(`_align`), Parquet 캐시.
   `python -m src.data.collect`로 실행.
 - **`returns.py`** — `log_returns`(첫 행 drop), `return_window(t, W)`(t 포함, 미래 미포함).
+- **`features.py`** — 자산 6지표 + 시장 2지표 계산(pandas-ta). 산식은 state_spec §3-1·config `features.params`.
+  warm-up NaN은 통합 drop(메우기 금지). 컬럼명 = `feat_{asset}_{name}`/`mkt_{name}`.
+- **`assemble.py`** — 수익률 윈도우 + 지표 + prev_weight(0)를 schema 슬라이스로 187 wide 조립.
+  컬럼 = `feature_names(W)`, 시장지표는 자산별 복제 없이 단일 배치.
 - **`feature_store.py`** — 가공된 187차원 피처의 저장·조회. Parquet 파티션 입출력
   (`write_features / load_features / partition_path`) + SQLite 메타
   (`init_meta_db / write_run / write_feature_columns / write_fold / read_*`). I/O 골격 구현 완료,
@@ -170,3 +174,4 @@ jupyter lab notebooks/eda_raw_prices.ipynb
 |---|---|---|
 | v0.1 | 2026-06-28 | 최초 작성. 기반(config·schema)·수집(collect·returns) 구현 반영. |
 | v0.2 | 2026-06-28 | Feature Store 저장소(§3-1), 데이터 품질 검증·EDA(§7) 추가. |
+| v0.3 | 2026-07-02 | 지표 계산(features.py)·187 조립(assemble.py) 구현. state_spec §3-1 산식 반영. |
