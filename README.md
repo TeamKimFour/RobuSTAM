@@ -31,6 +31,15 @@ python -m src.data.collect
 # → data/raw/prices_raw.parquet 생성
 ```
 
+## Feature Store 빌드
+
+원시 가격 → 187차원 정규화 State + 익일수익률(targets)을 fold/split 파티션으로 적재한다.
+
+```bash
+python -m src.data.build
+# → data/feature_store/fold=*/split=*/{part,targets}.parquet + meta.sqlite
+```
+
 ## 테스트
 
 ```bash

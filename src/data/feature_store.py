@@ -155,6 +155,49 @@ def read_folds(db_path: str, run_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def write_scaler_stats(
+    db_path: str, run_id: str, fold_id: int, rows: list[tuple[str, float, float]]
+) -> None:
+    """정규화 통계(feature_name, mean, std)를 fold 단위로 저장한다(추론 재사용·감사용)."""
+    with sqlite3.connect(db_path) as conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO scaler_stats VALUES (?,?,?,?,?)",
+            [(run_id, fold_id, name, float(mean), float(std)) for name, mean, std in rows],
+        )
+
+
+def read_scaler_stats(db_path: str, run_id: str, fold_id: int) -> dict[str, tuple[float, float]]:
+    """fold의 정규화 통계를 {feature_name: (mean, std)}로 반환한다."""
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT feature_name, mean, std FROM scaler_stats WHERE run_id=? AND fold_id=?",
+            (run_id, fold_id),
+        ).fetchall()
+    return {name: (mean, std) for name, mean, std in rows}
+
+
+# ── 원시 익일 수익률(targets) — 보상·백테스트용 (정규화 안 함) ──
+def targets_path(out_dir: str, fold_id: int, split: str) -> Path:
+    """fold/split 파티션의 targets(익일 수익률) Parquet 경로."""
+    return partition_path(out_dir, fold_id, split).with_name("targets.parquet")
+
+
+def write_targets(df: pd.DataFrame, out_dir: str, fold_id: int, split: str) -> Path:
+    """익일 수익률 targets를 State와 같은 파티션에 저장한다(컬럼 fwd_ret_<asset>)."""
+    path = targets_path(out_dir, fold_id, split)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(path)
+    return path
+
+
+def load_targets(out_dir: str, fold_id: int, split: str) -> pd.DataFrame:
+    """fold/split 파티션의 targets를 읽는다."""
+    path = targets_path(out_dir, fold_id, split)
+    if not path.is_file():
+        raise FileNotFoundError(f"targets 파티션이 없습니다: {path}")
+    return pd.read_parquet(path)
+
+
 def config_hash(cfg: dict) -> str:
     """config의 핵심값 해시 — 차원·자산순서 변경을 탐지(저장 데이터와 코드 정합성)."""
     import hashlib

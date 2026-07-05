@@ -16,9 +16,10 @@
 | 로그수익률·윈도우 | `src/data/returns.py` | ✅ 구현 |
 | 기술적 지표 6+2 | `src/data/features.py` | ✅ 구현 |
 | 187차원 조립 | `src/data/assemble.py` | ✅ 구현 |
-| walk-forward 분할 | `src/data/splits.py` | ⏳ 2주차 (PR-B) |
-| z-score 정규화 | `src/data/normalize.py` | ⏳ 2주차 (PR-B) |
-| Feature Store 입출력 | `src/data/feature_store.py` | ✅ I/O 구현 (실데이터 2주차) |
+| walk-forward 분할 | `src/data/splits.py` | ✅ 구현 |
+| z-score 정규화 | `src/data/normalize.py` | ✅ 구현 |
+| Feature Store 입출력 | `src/data/feature_store.py` | ✅ 구현 (scaler_stats·targets 포함) |
+| 빌드 오케스트레이터 | `src/data/build.py` | ✅ 구현 (실데이터 적재) |
 
 ---
 
@@ -56,6 +57,12 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
   warm-up NaN은 통합 drop(메우기 금지). 컬럼명 = `feat_{asset}_{name}`/`mkt_{name}`.
 - **`assemble.py`** — 수익률 윈도우 + 지표 + prev_weight(0)를 schema 슬라이스로 187 wide 조립.
   컬럼 = `feature_names(W)`, 시장지표는 자산별 복제 없이 단일 배치.
+- **`splits.py`** — Expanding walk-forward `Fold` 생성(`make_folds`). anchor 고정·train 누적,
+  test 블록 전진, train↔test 사이 embargo 거래일 갭.
+- **`normalize.py`** — `ZScoreScaler`(fit/transform 분리). μ/σ는 **fold train에서만 fit**,
+  valid/test는 적용만. 수익률 per_asset·지표 per_column·prev_weight 제외·std=0 가드. 통계 직렬화(`scaler_stats`).
+- **`build.py`** — 오케스트레이터. 수집→지표→조립→(fold별 train fit→transform)→적재 + `targets`.
+  실행 `python -m src.data.build`.
 - **`feature_store.py`** — 가공된 187차원 피처의 저장·조회. Parquet 파티션 입출력
   (`write_features / load_features / partition_path`) + SQLite 메타
   (`init_meta_db / write_run / write_feature_columns / write_fold / read_*`). I/O 골격 구현 완료,
@@ -76,6 +83,11 @@ data/feature_store/fold=<id>/split=<train|valid|test>/part.parquet
 - 컬럼명은 `schema.feature_names(W)` 그대로 사용(`ret_SPY_lag0` … `prevw_SHV`) → 자기설명·차원 검증 용이.
 - **fold/split 파티션**: walk-forward 학습의 자연 접근 단위("Fold1의 train만 로드").
 
+### targets.parquet — 익일 수익률 (보상·백테스트용)
+State 파티션과 같은 폴더에 `targets.parquet` 동반 저장. 컬럼 `fwd_ret_<asset>`, `fwd_ret[t]=logret[t+1]`,
+State와 index 정렬(익일 없는 마지막 행 drop). **정규화 안 함**(실제 수익률 스케일). `load_targets`로 로드.
+정규화된 State(관측)로는 보상을 계산할 수 없으므로, 형우 환경·찬휘 백테스트가 이 파일을 join해 사용한다.
+
 ### SQLite — 메타DB (`data/feature_store/meta.sqlite`)
 데이터 산출물은 `.gitignore`(`/data/`)되므로, "어떤 config·통계로 만들어졌나"의 **감사 기록**이자
 추론(도현) 재사용 근거. 테이블:
@@ -84,8 +96,8 @@ data/feature_store/fold=<id>/split=<train|valid|test>/part.parquet
 |---|---|---|
 | `runs` | config 스냅샷(W·state_dim·자산순서·config_hash) | 1주차 |
 | `feature_columns` | 187개 컬럼명·인덱스 (차원 감사) | 1주차 |
-| `folds` | 각 fold train/valid/test 날짜 경계·embargo | 2주차(splits) |
-| `scaler_stats` | 정규화 평균·표준편차 (추론 재사용) | 2주차(normalize) |
+| `folds` | 각 fold train/valid/test 날짜 경계·embargo | ✅ (splits) |
+| `scaler_stats` | 정규화 평균·표준편차 (추론 재사용) | ✅ (normalize) |
 
 > 데이터 소스는 **yfinance 단일**이다. 초기 기획서의 KRX·FinRL은 저장소 문서(CLAUDE.md 스택·state_spec)에
 > 없고, 고정 US ETF 유니버스 5종이 모두 yfinance로 커버되므로 채택하지 않는다.
@@ -137,7 +149,10 @@ pip install -r requirements.txt
 # 2) 원시 데이터 수집 → data/raw/prices_raw.parquet
 python -m src.data.collect
 
-# 3) 테스트 (차원·인덱스맵·룩어헤드 회귀)
+# 3) Feature Store 빌드 → data/feature_store/fold=*/split=* (187 State + targets + 메타)
+python -m src.data.build
+
+# 4) 테스트 (차원·인덱스맵·룩어헤드 회귀)
 pytest tests/ -v
 
 # 4) 데이터 품질 검증 (EDA 요약 + 자동 검사)
@@ -175,3 +190,4 @@ jupyter lab notebooks/eda_raw_prices.ipynb
 | v0.1 | 2026-06-28 | 최초 작성. 기반(config·schema)·수집(collect·returns) 구현 반영. |
 | v0.2 | 2026-06-28 | Feature Store 저장소(§3-1), 데이터 품질 검증·EDA(§7) 추가. |
 | v0.3 | 2026-07-02 | 지표 계산(features.py)·187 조립(assemble.py) 구현. state_spec §3-1 산식 반영. |
+| v0.4 | 2026-07-03 | walk-forward 분할·z-score 정규화·build 오케스트레이터 구현. Feature Store 실데이터 적재 + targets. |
