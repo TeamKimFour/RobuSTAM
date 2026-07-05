@@ -26,12 +26,13 @@ wheels/
 MANIFEST
 
 # ===== 가상환경 =====
-.venv/
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
+# 루트 가상환경 폴더만 무시 (src/env/ 소스 패키지는 추적해야 하므로 앵커)
+/.venv/
+/venv/
+/env/
+/ENV/
+/env.bak/
+/venv.bak/
 .python-version
 
 # ===== 환경변수 / 시크릿 =====
