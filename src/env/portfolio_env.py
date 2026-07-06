@@ -10,12 +10,14 @@
 
 데이터 계약 (팀 회의 확정):
     - state_df 컬럼 = `schema.feature_names(W)` (민지 `assemble.assemble_state_matrix` 출력).
-    - returns_df 컬럼 = `fwd_ret_<asset>` (민지 `feature_store.load_targets` 출력, 로그수익률).
-    - returns_df.iloc[t] = 시점 t에 실현된 로그수익률.
+    - returns_df 컬럼 = `fwd_ret_<asset>` (민지 `feature_store.load_targets` 출력).
+    - returns_df.iloc[t] = **fwd_ret[t] = log_ret[t+1]** (index t에 이미 t→t+1 기간 수익률
+      저장 — 룩어헤드 방지는 민지 targets 저장 단계에서 처리됨).
 
 리밸런싱·보상 모델:
     - 매 스텝 시작에 목표 비중으로 즉시 완전 리밸런싱 (기간 내 드리프트 무시).
-    - 룩어헤드 방지: r_next는 self._t를 먼저 증가시킨 뒤 조회한다.
+    - **룩어헤드 방지:** returns_df.iloc[self._t]를 그대로 조회한다. fwd_ret 규약상
+      index t 자체가 이미 next-day 수익률이므로 인덱스 조작 없이 사용한다.
     - **선택지 α (팀 회의 확정):** 민지 targets은 로그수익률로 저장되어 있으나 도현
       `calculate_reward`는 산술수익률을 기대한다. 이 어댑터 역할을 env가 담당해
       `r_arith = exp(r_log) - 1`로 변환 후 넘긴다.
@@ -141,8 +143,9 @@ class PortfolioEnv(gym.Env):
         w_new = _softmax(action)
         w_prev = self._current_weight
 
-        # 2) 다음 기간 실현 수익률 조회 (룩어헤드 방지: t 먼저 증가)
-        self._t += 1
+        # 2) 다음 기간(=t→t+1) 실현 수익률 조회
+        #    민지 targets 규약: returns_df.iloc[t] = fwd_ret[t] = log_ret[t+1]
+        #    → index t 자체가 이미 next-day 값이므로 인덱스 조작 없이 조회 (한 칸 밀림 사고 방지)
         r_log = self._log_returns[self._t]
 
         # 3) 선택지 α: 로그수익률 → 산술수익률 (도현 calculate_reward 계약)
@@ -157,8 +160,9 @@ class PortfolioEnv(gym.Env):
         )
         reward = detail["reward"]
 
-        # 5) 상태 업데이트 (완전 리밸런싱 가정)
+        # 5) 상태 업데이트 (완전 리밸런싱 가정) + 시간 인덱스 진행
         self._current_weight = w_new
+        self._t += 1
 
         terminated = self._t >= len(self._state) - 1
         info = {

@@ -182,14 +182,15 @@ def test_reward_delegates_to_calculate_reward_with_arithmetic_returns():
     """env 보상 = calculate_reward(prev, w_new, expm1(r_log), c) 와 정확히 일치.
 
     이 테스트가 통과하면 env가 (1) reward 계산을 직접 하지 않고 (2) 로그→산술
-    변환을 정확히 수행한다는 두 계약을 모두 만족한다는 뜻이다.
+    변환을 정확히 수행하며 (3) 민지 fwd_ret 규약(index t=next-day)을 정확히 따른다는
+    세 계약을 모두 만족한다는 뜻이다.
     """
     W = 30
     n = 5
     s = _fake_state_df(W, n_rows=n)
-    # 결정적 log returns: r_log[t] = 0.01 * t
+    # 결정적 log returns (민지 규약: fwd_ret[t] = log_ret[t+1] 저장): r_log[t] = 0.01 * (t+1)
     r_log_arr = np.tile(
-        np.arange(n, dtype=np.float64).reshape(-1, 1) * 0.01, (1, 5)
+        (np.arange(n, dtype=np.float64) + 1.0).reshape(-1, 1) * 0.01, (1, 5)
     )
     r = pd.DataFrame(r_log_arr, index=s.index, columns=FWD_RET_COLS)
     env = PortfolioEnv(s, r, cfg=_fake_cfg(W, c=0.001))
@@ -199,10 +200,31 @@ def test_reward_delegates_to_calculate_reward_with_arithmetic_returns():
 
     w_new = _softmax(logits)  # [0.2]*5
     w_prev = np.array([0.0, 0.0, 0.0, 0.0, 1.0])
-    # env가 로그→산술 변환하고 도현 함수에 넘겨야 정합
-    r_arith_next = np.expm1(r_log_arr[1])  # t=1 (룩어헤드 방지 검증 포함)
+    # 민지 fwd_ret 규약: env는 t=0 위치 값을 그대로 사용 (이미 next-day)
+    r_arith_next = np.expm1(r_log_arr[0])
     expected = calculate_reward(w_prev, w_new, r_arith_next, transaction_cost_rate=0.001)
     assert reward == pytest.approx(expected, abs=1e-12)
+
+
+def test_first_step_uses_returns_at_index_0_not_1():
+    """민지 fwd_ret 규약 회귀 방지 — 한 칸 밀림 사고 재발 방지.
+
+    fwd_ret[t]가 이미 t→t+1 수익률이므로 첫 스텝은 index 0을 써야 한다.
+    만약 코드가 예전처럼 index 1을 참조하면 이 테스트가 실패한다.
+    """
+    W = 30
+    n = 4
+    s = _fake_state_df(W, n_rows=n)
+    # 각 자산 t 위치를 고유값으로 → 어느 인덱스에서 읽었는지 역추적 가능
+    r_log_arr = np.zeros((n, 5), dtype=np.float64)
+    r_log_arr[0] = 0.02   # 이 값이 첫 step의 log_return이어야 함
+    r_log_arr[1] = 0.99   # 만약 index 1을 참조했다면 log_return이 log(1+expm1(0.99))=0.99가 됨
+    r = pd.DataFrame(r_log_arr, index=s.index, columns=FWD_RET_COLS)
+    env = PortfolioEnv(s, r, cfg=_fake_cfg(W, c=0.0))
+    env.reset()
+    # 균등 로짓 → 균등 비중 → log_return = log(1 + expm1(r_log[?])) = r_log[?]
+    _, _, _, _, info = env.step(np.array([1.0] * 5, dtype=np.float64))
+    assert info["log_return"] == pytest.approx(0.02, abs=1e-9)
 
 
 def test_log_return_conversion_not_identity():
