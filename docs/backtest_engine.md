@@ -24,8 +24,10 @@ AI 모델 (도현) → action (자산 비중 벡터, ∑wᵢ=1)
                           │
                      engine.py
               ┌───────────────────────┐
-              │  1. 주가 변동 반영     │
-              │  2. 수수료 차감        │
+              │  1. 리밸런싱·수수료   │
+              │     차감(start-of-day)│
+              │  2. 새 비중으로 오늘   │
+              │     주가 변동 반영     │
               │  3. 새 NAV 반환        │
               └───────────────────────┘
                           │
@@ -45,21 +47,24 @@ AI 모델 (도현) → action (자산 비중 벡터, ∑wᵢ=1)
 
 ## 4. 핵심 수식
 
-### NAV 갱신
-```
-nav_after_return = prev_nav × (1 + Σ(wᵢ × rᵢ))
-```
-- `wᵢ` : 전날 자산 비중
-- `rᵢ` : 오늘 자산 수익률
+**리밸런싱 시점: start-of-day.** 매 스텝 시작에 전날 비중에서 새 비중으로 리밸런싱하고,
+그 새 비중으로 당일 수익을 실현한다. (형우 Gym `env`와 관점 통일 — CLAUDE.md §7-2)
 
-### 수수료 차감
+### 수수료 차감 (리밸런싱 전 NAV 기준)
 ```
-turnover = Σ|new_wᵢ - prev_wᵢ|
-cost     = nav_after_return × turnover × c
-new_nav  = nav_after_return - cost
+turnover      = Σ|new_wᵢ - prev_wᵢ|
+cost          = prev_nav × turnover × c
+nav_after_cost = prev_nav - cost
 ```
 - `c` : 편도 거래비용률 (`config.yaml`의 `transaction_cost`, 기본 0.1%)
 - `turnover` : 비중 변화량의 합 → 많이 바꿀수록 수수료 증가 (과매매 억제)
+
+### NAV 갱신 (새 비중으로 당일 수익 실현)
+```
+new_nav = nav_after_cost × (1 + Σ(new_wᵢ × rᵢ))
+```
+- `new_wᵢ` : 리밸런싱 후(오늘) 자산 비중
+- `rᵢ` : 오늘 자산 수익률
 
 ---
 
@@ -95,3 +100,4 @@ new_nav  = nav_after_return - cost
 | 버전 | 날짜 | 내용 |
 |---|---|---|
 | v0.1 | 2026-07-01 | 최초 작성. NAV 갱신·수수료 차감 로직 구현 반영. |
+| v0.2 | 2026-07-08 | 리밸런싱 시점을 end-of-day → start-of-day로 변경, env와 관점 통일. |
