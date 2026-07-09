@@ -20,6 +20,8 @@ data:
   raw_dir: "data/raw"
   feature_store_dir: "data/feature_store"
   meta_db: "data/feature_store/meta.sqlite"
+  s3_bucket: ""            # 비우면 S3 업로드 skip (찬휘 AWS 세팅 후 버킷명 입력)
+  s3_prefix: "robustam"    # S3 키 접두어
 
 # ── 피처 정의 (2주차 구현 — 이번 주엔 명세만 기록) ──
 # 자산별 6개 + 시장공통 2개. 순서는 docs/state_spec.md 인덱스맵과 일치해야 함.
