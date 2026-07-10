@@ -1,7 +1,9 @@
 """자산 5종 데일리 리밸런싱 커스텀 Gymnasium 환경.
 
 관측/행동 공간·reset()·step()을 정의한다. 실제 보상 계산은 이 클래스가 하지 않고
-`src.reward.calculate_reward`에 위임한다(팀 회의 확정: env와 reward 모듈은 분리).
+`src.reward.calculate_reward_verbose`에 위임한다(팀 회의 확정: env와 reward 모듈은 분리).
+verbose 버전을 쓰는 것은 스텝별 중간값(portfolio_return·turnover·cost)을 info로
+반환해 학습 진단·MLflow 로깅에 활용하기 위한 것이고, 입력 검증도 verbose 쪽에 통합돼 있다.
 
 인터페이스 계약 (docs/state_spec.md §3 · CLAUDE.md §2):
     관측 shape = (state_dim,), state_dim = config.window에서 산출 (W=30 → 187).
@@ -21,7 +23,7 @@
     - **선택지 α (팀 회의 확정):** 민지 targets은 로그수익률로 저장되어 있으나 도현
       `calculate_reward`는 산술수익률을 기대한다. 이 어댑터 역할을 env가 담당해
       `r_arith = exp(r_log) - 1`로 변환 후 넘긴다.
-    - 보상: `src.reward.calculate_reward(prev, new, r_arith, c)` (엔지니어 결정 완료).
+    - 보상: `src.reward.calculate_reward_verbose(prev, new, r_arith, c)` (엔지니어 결정 완료).
 """
 
 from __future__ import annotations

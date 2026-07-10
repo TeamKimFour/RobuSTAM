@@ -28,13 +28,17 @@ DEFAULT_TRANSACTION_COST_RATE = 0.001
 _MIN_PORTFOLIO_RETURN = -0.999999
 
 
-def calculate_reward(
+def calculate_reward_verbose(
     prev_weights: np.ndarray,
     new_weights: np.ndarray,
     asset_returns: np.ndarray,
     transaction_cost_rate: float = DEFAULT_TRANSACTION_COST_RATE,
-) -> float:
-    """한 스텝의 보상 R_t = ln(1 + w_new · r) − c · Σ|w_new − w_prev|.
+) -> dict:
+    """한 스텝의 보상과 중간 계산값을 dict로 반환한다 (학습 진단·MLflow 로깅용).
+
+    검증(shape 일치·비중 합≈1)과 계산이 이 함수에 모여 있어, env.step()이 이 함수를
+    직접 호출해도 계약 위반을 조기에 잡을 수 있다. `calculate_reward`는 이 함수를
+    감싸 스칼라 보상만 돌려주는 얇은 래퍼다.
 
     Parameters
     ----------
@@ -49,8 +53,8 @@ def calculate_reward(
 
     Returns
     -------
-    float
-        이번 스텝의 보상값 R_t (로그수익률 − 거래비용 페널티).
+    dict
+        키: portfolio_return · log_return · turnover · transaction_cost · reward.
 
     Raises
     ------
@@ -84,28 +88,6 @@ def calculate_reward(
     transaction_cost = transaction_cost_rate * turnover
 
     # 4) 최종 보상
-    return log_return - transaction_cost
-
-
-def calculate_reward_verbose(
-    prev_weights: np.ndarray,
-    new_weights: np.ndarray,
-    asset_returns: np.ndarray,
-    transaction_cost_rate: float = DEFAULT_TRANSACTION_COST_RATE,
-) -> dict:
-    """calculate_reward와 동일하지만 중간 계산값을 dict로 반환한다 (학습 진단·MLflow 로깅용).
-
-    반환 키: portfolio_return · log_return · turnover · transaction_cost · reward
-    """
-    prev_weights = np.asarray(prev_weights, dtype=np.float64)
-    new_weights = np.asarray(new_weights, dtype=np.float64)
-    asset_returns = np.asarray(asset_returns, dtype=np.float64)
-
-    portfolio_return = float(np.dot(new_weights, asset_returns))
-    portfolio_return_clipped = max(portfolio_return, _MIN_PORTFOLIO_RETURN)
-    log_return = float(np.log1p(portfolio_return_clipped))
-    turnover = float(np.abs(new_weights - prev_weights).sum())
-    transaction_cost = transaction_cost_rate * turnover
     reward = log_return - transaction_cost
 
     return {
@@ -115,3 +97,22 @@ def calculate_reward_verbose(
         "transaction_cost": transaction_cost,
         "reward": reward,
     }
+
+
+def calculate_reward(
+    prev_weights: np.ndarray,
+    new_weights: np.ndarray,
+    asset_returns: np.ndarray,
+    transaction_cost_rate: float = DEFAULT_TRANSACTION_COST_RATE,
+) -> float:
+    """한 스텝의 보상 R_t = ln(1 + w_new · r) − c · Σ|w_new − w_prev|.
+
+    검증·계산 로직은 `calculate_reward_verbose`에 모여 있으며, 이 함수는 스칼라
+    보상만 필요한 호출자를 위한 얇은 래퍼다.
+    """
+    return calculate_reward_verbose(
+        prev_weights=prev_weights,
+        new_weights=new_weights,
+        asset_returns=asset_returns,
+        transaction_cost_rate=transaction_cost_rate,
+    )["reward"]

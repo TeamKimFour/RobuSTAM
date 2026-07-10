@@ -162,3 +162,22 @@ def test_verbose_returns_expected_keys_and_matches_scalar():
     assert d["log_return"] - d["transaction_cost"] == pytest.approx(d["reward"], abs=1e-12)
     assert d["turnover"] == pytest.approx(float(np.abs(new - prev).sum()), abs=1e-12)
     assert d["transaction_cost"] == pytest.approx(c * d["turnover"], abs=1e-12)
+
+
+# ── verbose 경로도 동일한 검증을 강제 (env.step()의 실사용 경로) ─────────
+
+def test_verbose_shape_mismatch_raises():
+    with pytest.raises(ValueError, match="shape"):
+        calculate_reward_verbose(np.zeros(4), np.zeros(5), np.zeros(5))
+
+
+def test_verbose_prev_weight_sum_not_1_raises():
+    prev = np.array([0.5, 0.5, 0.5, 0.5, 0.5])  # 합 2.5
+    with pytest.raises(ValueError, match="prev_weights"):
+        calculate_reward_verbose(prev, _uniform(), np.zeros(N))
+
+
+def test_verbose_new_weight_sum_not_1_raises():
+    new = np.array([0.5, 0.5, 0.5, 0.5, 0.5])  # 합 2.5
+    with pytest.raises(ValueError, match="new_weights"):
+        calculate_reward_verbose(_uniform(), new, np.zeros(N))
