@@ -50,6 +50,30 @@ docker run --rm -v "$PWD/data:/app/data" robustam-pipeline src.data.collect
 docker run --rm -v "$PWD/data:/app/data" robustam-pipeline src.data.build
 ```
 
+## Docker Compose 실행 (API + nginx HTTPS)
+
+FastAPI 추론 서버(현재는 헬스체크 placeholder, `src/api/` — 도현 실제 코드로 교체 예정)를
+nginx 리버스 프록시 뒤에서 self-signed HTTPS로 띄운다.
+
+```bash
+# 1) self-signed 인증서 생성 (최초 1회, git에 커밋되지 않음)
+bash docker/nginx/generate_cert.sh
+
+# 2) 빌드 후 실행
+docker compose up --build
+```
+
+- FastAPI: `http://localhost:8000` (컨테이너 간 통신·직접 디버깅용)
+- nginx(HTTPS): `https://localhost` → `/health` 호출 시 `{"status": "ok"}` 응답 확인
+
+```bash
+curl -k https://localhost/health
+```
+
+`-k`(또는 브라우저에서 "안전하지 않음" 경고 무시)가 필요한 이유: self-signed 인증서라
+공인 CA가 서명하지 않았기 때문이다. 로컬 개발 환경에서는 정상이며, 실제 배포 시에는
+공인 인증서(Let's Encrypt 등)로 교체해야 한다.
+
 ## S3 업로드 (선택 — 클라우드 공유)
 
 Feature Store를 S3에 올려 팀·서비스가 공유한다. `config.data.s3_bucket`(또는 환경변수 `S3_BUCKET`)이
