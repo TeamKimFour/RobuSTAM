@@ -31,7 +31,14 @@ class BacktestEngine:
         price_returns: np.ndarray,
     ) -> tuple[float, float]:
         """
-        하루치 NAV 갱신
+        하루치 NAV 갱신 (start-of-day 리밸런싱)
+
+        매 스텝 시작에 전날 비중에서 새 비중으로 리밸런싱하고,
+        그 새 비중으로 오늘 수익을 실현한다(env와 관점 통일).
+
+        완전 리밸런싱 가정(팀 회의 확정): env와 동일하게 기간 내 드리프트는
+        무시한다. 여러 날을 순회하는 호출자는 다음 스텝의 prev_weights로
+        이번 스텝의 new_weights를 드리프트 조정 없이 그대로 넘겨야 한다.
 
         Parameters
         ----------
@@ -45,14 +52,14 @@ class BacktestEngine:
         new_nav  : 오늘 NAV
         cost     : 오늘 차감된 수수료
         """
-        # 1. 주가 변동 반영
-        nav_after_return = prev_nav * (1 + np.dot(prev_weights, price_returns))
-
-        # 2. 수수료 계산 (비중 변경폭 × 거래 비용률)
+        # 1. 수수료 계산 (비중 변경폭 × 거래 비용률) — 리밸런싱 전 NAV 기준
         turnover = np.sum(np.abs(new_weights - prev_weights))
-        cost = nav_after_return * turnover * self.transaction_cost
+        cost = prev_nav * turnover * self.transaction_cost
 
-        # 3. 수수료 차감 후 새 NAV
-        new_nav = nav_after_return - cost
+        # 2. 수수료 차감 후 리밸런싱
+        nav_after_cost = prev_nav - cost
+
+        # 3. 새 비중으로 오늘 주가 변동 반영
+        new_nav = nav_after_cost * (1 + np.dot(new_weights, price_returns))
 
         return new_nav, cost

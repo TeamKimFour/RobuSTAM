@@ -81,11 +81,11 @@ def test_nav_calculation_is_correct(engine):
         price_returns=price_returns,
     )
 
-    # 수동 계산
-    nav_after_return = prev_nav * (1 + np.dot(prev_weights, price_returns))
+    # 수동 계산 (start-of-day: 리밸런싱 → 수수료 차감 → 새 비중으로 수익 실현)
     turnover = np.sum(np.abs(new_weights - prev_weights))
-    expected_cost = nav_after_return * turnover * 0.001
-    expected_nav = nav_after_return - expected_cost
+    expected_cost = prev_nav * turnover * 0.001
+    nav_after_cost = prev_nav - expected_cost
+    expected_nav = nav_after_cost * (1 + np.dot(new_weights, price_returns))
 
     assert new_nav == pytest.approx(expected_nav)
     assert cost == pytest.approx(expected_cost)
