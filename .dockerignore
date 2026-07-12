@@ -1,0 +1,30 @@
+# 빌드 컨텍스트에서 제외 (이미지 경량화·불필요 파일 차단)
+.git/
+.github/
+.venv/
+venv/
+env/
+ENV/
+
+# 데이터 산출물 (볼륨/S3로 처리)
+data/
+mlruns/
+
+# 노트북·문서·플랜
+notebooks/
+docs/
+*.md
+*.html
+
+# 테스트·캐시
+tests/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# 로컬 설정
+.claude/
+requirements-dev.txt

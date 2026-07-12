@@ -40,6 +40,28 @@ python -m src.data.build
 # → data/feature_store/fold=*/split=*/{part,targets}.parquet + meta.sqlite
 ```
 
+## Docker 실행 (파이프라인)
+
+로컬·CI와 동일한 환경으로 collect·build를 컨테이너에서 실행한다. 데이터는 볼륨으로 마운트.
+
+```bash
+docker build -t robustam-pipeline -f docker/Dockerfile.pipeline .
+docker run --rm -v "$PWD/data:/app/data" robustam-pipeline src.data.collect
+docker run --rm -v "$PWD/data:/app/data" robustam-pipeline src.data.build
+```
+
+## S3 업로드 (선택 — 클라우드 공유)
+
+Feature Store를 S3에 올려 팀·서비스가 공유한다. `config.data.s3_bucket`(또는 환경변수 `S3_BUCKET`)이
+비어 있으면 자동 skip. `meta.sqlite`도 파일로 업로드한다(s3:// 직접쓰기 불가 회피).
+
+```bash
+S3_BUCKET=my-bucket S3_PREFIX=robustam python -m src.data.s3_sync
+```
+
+> 매일 자동 실행: `.github/workflows/daily.yml`(KST 07:00 cron) → collect→build→(설정 시)S3 업로드.
+> 실제 S3 연결은 AWS role(`vars.AWS_ROLE_ARN`)·버킷(`vars.S3_BUCKET`) 설정 후 활성.
+
 ## 테스트
 
 ```bash

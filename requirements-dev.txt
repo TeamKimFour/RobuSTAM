@@ -6,3 +6,4 @@
 notebook        # Jupyter — EDA 노트북 실행
 plotly          # 인터랙티브 차트 (가격·수익률·상관)
 nbconvert       # 노트북 헤드리스 실행/검증
+moto==5.2.2     # S3 mock — test_s3_sync (실제 AWS 없이 검증)

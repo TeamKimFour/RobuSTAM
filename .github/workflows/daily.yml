@@ -1,0 +1,54 @@
+name: Daily Feature Store
+
+# 매일 데이터 수집 → Feature Store 빌드 → (설정 시) S3 업로드.
+# 데일리 리밸런싱 서비스의 데이터 갱신 심장박동. precompute(오늘의 비중)는 모델 준비 후 추가.
+on:
+  schedule:
+    - cron: "0 22 * * *" # UTC 22:00 = KST 07:00 (전일 미국장 마감·데이터 확정 후)
+  workflow_dispatch: {} # 수동 트리거
+
+permissions:
+  id-token: write # OIDC (S3 업로드용, role 설정 시)
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 원시 데이터 수집
+        run: python -m src.data.collect
+
+      - name: Feature Store 빌드
+        run: python -m src.data.build
+
+      # precompute(오늘의 추천 비중) — 도현 모델 준비 후 활성화
+      # - name: 추천 비중 precompute
+      #   run: python -m src.api.precompute
+
+      # ── 이하 S3 업로드: AWS role(vars.AWS_ROLE_ARN) 설정 시에만 실행 ──
+      - name: AWS 자격증명 (OIDC)
+        if: vars.AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ap-northeast-2
+
+      - name: S3 업로드
+        if: vars.AWS_ROLE_ARN != ''
+        env:
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+        run: python -m src.data.s3_sync

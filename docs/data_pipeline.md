@@ -20,6 +20,9 @@
 | z-score 정규화 | `src/data/normalize.py` | ✅ 구현 |
 | Feature Store 입출력 | `src/data/feature_store.py` | ✅ 구현 (scaler_stats·targets 포함) |
 | 빌드 오케스트레이터 | `src/data/build.py` | ✅ 구현 (실데이터 적재) |
+| Feature Store S3 업로드 | `src/data/s3_sync.py` | ✅ 구현 (⏳ AWS role·버킷 세팅 후 활성) |
+| 파이프라인 컨테이너 | `docker/Dockerfile.pipeline` | ✅ 구현 |
+| 매일 자동 빌드 (CI) | `.github/workflows/daily.yml` | ✅ 구현 |
 
 ---
 
@@ -63,6 +66,11 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
   valid/test는 적용만. 수익률 per_asset·지표 per_column·prev_weight 제외·std=0 가드. 통계 직렬화(`scaler_stats`).
 - **`build.py`** — 오케스트레이터. 수집→지표→조립→(fold별 train fit→transform)→적재 + `targets`.
   실행 `python -m src.data.build`.
+- **`s3_sync.py`** — 로컬 data(raw·feature_store)를 S3에 업로드(boto3). `meta.sqlite`도 파일로 업로드
+  (s3:// 직접쓰기 불가 회피). 버킷 미설정 시 skip. 실행 `python -m src.data.s3_sync`.
+- **`docker/Dockerfile.pipeline`** — collect·build 컨테이너 이미지(Python 3.12·핀 의존성).
+- **`.github/workflows/daily.yml`** — 매일 KST 07:00 cron: collect→build→(AWS role 설정 시)S3 업로드.
+  precompute(오늘의 비중)는 모델 준비 후 추가. 실제 S3 연결은 찬휘 AWS 세팅(OIDC role·버킷) 후 활성.
 - **`feature_store.py`** — 가공된 187차원 피처의 저장·조회. Parquet 파티션 입출력
   (`write_features / load_features / partition_path`) + SQLite 메타
   (`init_meta_db / write_run / write_feature_columns / write_fold / read_*`). I/O 골격 구현 완료,
@@ -191,3 +199,4 @@ jupyter lab notebooks/eda_raw_prices.ipynb
 | v0.2 | 2026-06-28 | Feature Store 저장소(§3-1), 데이터 품질 검증·EDA(§7) 추가. |
 | v0.3 | 2026-07-02 | 지표 계산(features.py)·187 조립(assemble.py) 구현. state_spec §3-1 산식 반영. |
 | v0.4 | 2026-07-03 | walk-forward 분할·z-score 정규화·build 오케스트레이터 구현. Feature Store 실데이터 적재 + targets. |
+| v0.5 | 2026-07-09 | 배포 준비 반영: Docker 이미지·S3 업로드(s3_sync)·일일 워크플로(daily.yml). 실제 클라우드 연결 대기. |

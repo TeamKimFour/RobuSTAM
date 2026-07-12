@@ -1,0 +1,23 @@
+# RobuSTAM 데이터 파이프라인 이미지 (collect·build)
+# 로컬·CI와 동일한 Python 3.12 + 핀 의존성으로 어디서든 재현 실행.
+# 데이터 산출물(data/)은 이미지에 넣지 않고 볼륨/S3로 처리한다.
+#
+# 사용:
+#   docker build -t robustam-pipeline -f docker/Dockerfile.pipeline .
+#   docker run -v $PWD/data:/app/data robustam-pipeline src.data.collect
+#   docker run -v $PWD/data:/app/data robustam-pipeline src.data.build   (기본값)
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# 1) 의존성 먼저 설치 (레이어 캐시 활용)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 2) 실행에 필요한 소스·설정만 복사 (data/·tests/·docs/ 제외)
+COPY config/ ./config/
+COPY src/ ./src/
+
+# 3) `python -m <모듈>` 형태로 실행. 인자 없으면 build.
+ENTRYPOINT ["python", "-m"]
+CMD ["src.data.build"]
