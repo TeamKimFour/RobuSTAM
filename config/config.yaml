@@ -20,7 +20,7 @@ data:
   raw_dir: "data/raw"
   feature_store_dir: "data/feature_store"
   meta_db: "data/feature_store/meta.sqlite"
-  s3_bucket: ""            # 비우면 S3 업로드 skip (찬휘 AWS 세팅 후 버킷명 입력)
+  s3_bucket: "robustam-teamkimfour"  # 찬휘 생성 S3 버킷(팀 공용). 자격증명은 여기 금지 → .env/IAM Role
   s3_prefix: "robustam"    # S3 키 접두어
   precompute_path: "data/precompute/latest.json"  # 익일 추천 비중 (민지 precompute 생성 → 도현 API 소비, docs/data_pipeline.md §8)
 
@@ -78,3 +78,13 @@ model:
   mlflow_tracking_uri: "mlruns"        # 로컬 파일 스토어 (CLAUDE.md 스택: MLflow)
   mlflow_experiment: "robustam-ppo"
   model_dir: "mlruns/models"           # 학습된 policy.zip 저장 위치
+
+# ── 추론(precompute) — src/inference/precompute.py ──
+# 배포할 policy와, 그 policy가 학습된 build 통계(정규화 재현용)를 가리킨다.
+# 도현 provenance(train.py가 기록하는 build run_id/fold_id)와 값이 일치해야
+# 추론 시 학습과 동일한 z-score가 룩어헤드 없이 재현된다(docs/data_pipeline.md §8).
+inference:
+  model_path: ""                 # 배포 policy.zip 경로 (도현이 확정 후 채움; 비면 모델 로드 불가)
+  scaler_run_id: ""              # 그 policy가 학습된 build run_id (meta.sqlite scaler_stats 조회 키)
+  scaler_fold_id: 0              # 그 policy가 학습된 fold_id
+  model_version: "ppo-fold0-v1"  # latest.json에 기록되는 버전 태그
