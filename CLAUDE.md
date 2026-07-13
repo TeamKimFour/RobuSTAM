@@ -160,3 +160,6 @@ RobuSTAM/
 
 ## 8. 참고 문서
 - [docs/state_spec.md](docs/state_spec.md) — State(관측공간) 명세 SSOT (`Box(187)`, 인덱스 맵, 부속결정)
+- [docs/data_pipeline.md](docs/data_pipeline.md) — 데이터 파이프라인 설계·Feature Store·룩어헤드 방지
+- [docs/db_schema.md](docs/db_schema.md) — 백테스트 실행 이력·성과 지표 SQLite 스키마
+- [docs/literature_review.md](docs/literature_review.md) — 관련 논문 정리 및 정책망(EIIE 등) 발전 아이디어
