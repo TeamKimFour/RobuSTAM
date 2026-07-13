@@ -81,3 +81,12 @@ def get_state_dim(cfg: dict) -> int:
     A = len(get_assets(cfg))
     W = get_window(cfg)
     return (A * W) + (N_ASSET_FEATURES * A) + N_MARKET_FEATURES + (N_PREV_WEIGHT * A)
+
+
+def get_precompute_path(cfg: dict) -> str:
+    """익일 추천 비중 파일(latest.json) 경로를 반환한다.
+
+    민지 precompute가 이 경로에 쓰고, 도현 API(src/api/main.py)가 이 경로를 읽는다
+    (docs/data_pipeline.md §8 계약).
+    """
+    return cfg.get("data", {}).get("precompute_path", "data/precompute/latest.json")

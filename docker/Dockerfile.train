@@ -1,0 +1,29 @@
+# RobuSTAM PPO 학습 이미지 (RunPod GPU 실행 대상, docs/model_training.md 참고)
+# 로컬·CI와 동일한 Python 3.12 + 핀 의존성으로 재현 실행. GPU는 런타임에 결정된다 —
+# PyPI torch 휠이 CUDA 런타임을 포함하므로, RunPod가 --gpus로 컨테이너에 GPU를
+# 노출해주기만 하면 이 이미지 그대로 GPU 학습이 된다(별도 CUDA 베이스 이미지 불필요).
+#
+# data/feature_store가 비어 있으면(볼륨 미마운트) collect→build를 먼저 실행해 채운다.
+#
+# 사용 (RunPod에서도 동일):
+#   docker build -t robustam-train -f docker/Dockerfile.train .
+#   docker run --gpus all -v $PWD/data:/app/data -v $PWD/mlruns:/app/mlruns robustam-train
+#   docker run --gpus all -v $PWD/data:/app/data -v $PWD/mlruns:/app/mlruns robustam-train \
+#       --fold-id 1 --total-timesteps 500000
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# 1) 의존성 먼저 설치 (레이어 캐시 활용) — torch 등 무거운 패키지 포함.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 2) 실행에 필요한 소스·설정만 복사 (data/·tests/·docs/ 제외)
+COPY config/ ./config/
+COPY src/ ./src/
+
+# 3) data/feature_store가 비어 있으면 collect→build로 채운 뒤 학습 시작.
+COPY docker/train_entrypoint.sh ./
+RUN chmod +x train_entrypoint.sh
+
+ENTRYPOINT ["./train_entrypoint.sh"]

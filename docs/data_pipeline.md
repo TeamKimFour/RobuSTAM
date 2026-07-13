@@ -70,7 +70,7 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
   (s3:// 직접쓰기 불가 회피). 버킷 미설정 시 skip. 실행 `python -m src.data.s3_sync`.
 - **`docker/Dockerfile.pipeline`** — collect·build 컨테이너 이미지(Python 3.12·핀 의존성).
 - **`.github/workflows/daily.yml`** — 매일 KST 07:00 cron: collect→build→(AWS role 설정 시)S3 업로드.
-  precompute(오늘의 비중)는 모델 준비 후 추가. 실제 S3 연결은 찬휘 AWS 세팅(OIDC role·버킷) 후 활성.
+  precompute(오늘의 비중, §8)는 모델 준비 후 추가. 실제 S3 연결은 찬휘 AWS 세팅(OIDC role·버킷) 후 활성.
 - **`feature_store.py`** — 가공된 187차원 피처의 저장·조회. Parquet 파티션 입출력
   (`write_features / load_features / partition_path`) + SQLite 메타
   (`init_meta_db / write_run / write_feature_columns / write_fold / read_*`). I/O 골격 구현 완료,
@@ -192,6 +192,42 @@ jupyter lab notebooks/eda_raw_prices.ipynb
 
 ---
 
+## 8. precompute — latest.json 계약 (민지 생성 → 도현 API 소비)
+
+매일 배치로 PPO 정책이 계산한 **익일 추천 비중 1건**을 `config.yaml`의 `data.precompute_path`
+(기본 `data/precompute/latest.json`)에 덮어쓴다. `src/api/main.py`의 `GET /inference/latest`가
+매 요청마다 이 파일을 읽기만 하므로, 온라인 추론 없이도 CLAUDE.md §1의 평균 지연 200ms 이하를
+구조적으로 만족한다.
+
+### 스키마
+```json
+{
+  "date": "2026-07-14",
+  "generated_at": "2026-07-13T09:15:00+09:00",
+  "model_version": "ppo_v1",
+  "weights": {"SPY": 0.40, "EWY": 0.15, "TLT": 0.20, "GLD": 0.15, "SHV": 0.10}
+}
+```
+
+| 필드 | 의미 |
+|---|---|
+| `date` | 이 비중이 적용되는 거래일(익일) |
+| `generated_at` | precompute 배치 실행 시각 (ISO 8601) |
+| `model_version` | 사용된 모델 버전 (`docs/db_schema.md`의 `model_versions.model_name`과 매칭 가능) |
+| `weights` | 자산 티커 → 비중. **키 집합은 `config.yaml`의 `assets`와 정확히 일치해야 하고 값의 합은 1**(API가 요청마다 검증) |
+
+### 계약 검증 (`src/api/main.py::get_latest_inference`)
+- 파일이 없으면 **503**을 반환한다 — precompute가 아직 안 돌았다는 정상 상태이지 버그가 아니다(1주차 현재
+  precompute는 미구현 상태).
+- `weights`의 자산 키가 `config.yaml`과 다르거나 합이 1에서 벗어나면 **500**을 반환해 파이프라인 오류를
+  조기에 드러낸다.
+
+### 아직 정해지지 않은 것 (민지 precompute 구현 시 확정 필요)
+- daily.yml에 precompute 스텝 추가 시점(모델 학습 파이프라인·`src/models/` 완성 후)
+- 배치 실패 시 이전 `latest.json`을 유지할지, 파일을 지울지(현재 API는 파일이 있으면 무조건 최신으로 신뢰)
+
+---
+
 ## 변경 이력
 | 버전 | 날짜 | 내용 |
 |---|---|---|
@@ -200,3 +236,4 @@ jupyter lab notebooks/eda_raw_prices.ipynb
 | v0.3 | 2026-07-02 | 지표 계산(features.py)·187 조립(assemble.py) 구현. state_spec §3-1 산식 반영. |
 | v0.4 | 2026-07-03 | walk-forward 분할·z-score 정규화·build 오케스트레이터 구현. Feature Store 실데이터 적재 + targets. |
 | v0.5 | 2026-07-09 | 배포 준비 반영: Docker 이미지·S3 업로드(s3_sync)·일일 워크플로(daily.yml). 실제 클라우드 연결 대기. |
+| v0.6 | 2026-07-13 | precompute latest.json 계약(§8) 추가 — src/api/main.py 추론 엔드포인트 구현과 함께. |
