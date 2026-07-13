@@ -11,7 +11,7 @@
 | 단계 | 모듈 | 상태 |
 |---|---|---|
 | NAV 갱신 및 수수료 차감 | `src/backtest/engine.py` | ✅ 구현 |
-| 멀티 벤치마크 (1/N · 60:40 · B&H) | `src/backtest/benchmark.py` | ⏳ 2주차 |
+| 멀티 벤치마크 (1/N · 60:40 · B&H) | `src/backtest/benchmark.py` | ✅ 구현 |
 | walk-forward 백테스트 루프 | `src/backtest/runner.py` | ⏳ 3주차 |
 | 결과 저장 (DB 연동) | `src/backtest/engine.py` | ⏳ 도현과 협의 후 |
 
@@ -42,6 +42,9 @@ AI 모델 (도현) → action (자산 비중 벡터, ∑wᵢ=1)
 
 - **`engine.py`** — `BacktestEngine` 클래스. `calc_nav()`로 하루치 NAV를 갱신하고 수수료를
   차감한다. 거래비용률은 `config.yaml`에서 읽는다(하드코딩 금지).
+- **`benchmark.py`** — 1/N·60:40·B&H 세 벤치마크를 거래일 단위로 `calc_nav()`를 반복
+  호출해 NAV 곡선(pd.DataFrame)으로 만든다. 자산 목록은 `config.yaml`에서 읽고,
+  `price_returns`의 컬럼 순서가 이와 다르면 예외를 던진다(CLAUDE.md §2 자산 순서 고정).
 
 ---
 
@@ -70,6 +73,47 @@ new_nav = nav_after_cost × (1 + Σ(new_wᵢ × rᵢ))
 ```
 - `new_wᵢ` : 리밸런싱 후(오늘) 자산 비중
 - `rᵢ` : 오늘 자산 수익률
+
+---
+
+## 4-1. 벤치마크 전략 (`src/backtest/benchmark.py`)
+
+세 전략 모두 `calc_nav()`를 거래일 단위로 반복 호출해 NAV 곡선을 만든다. 엔진 인터페이스
+자체는 변경하지 않고, 전략별로 `prev_weights`/`new_weights`에 무엇을 넘길지만 다르게
+구성한다. 초기 보유는 첫날 진입 전 **SHV(현금성) 100%**에서 시작한다(`PortfolioEnv.reset()`과
+동일 관례).
+
+### 1/N (동일비중) · 60:40 — 목표비중 고정
+매일 `prev_weights = new_weights = 고정 목표비중`으로 호출한다. engine.py §4의 "여러 날을
+순회하는 호출자는 다음 스텝의 prev_weights로 이번 스텝의 new_weights를 드리프트 조정 없이
+그대로 넘겨야 한다"는 규약을 그대로 따른 것 — 목표비중 자체가 매일 동일하므로 첫날(초기
+보유 SHV 100% → 목표비중 진입)에만 비용이 발생하고, 이후로는 `turnover=0`이다.
+
+- **1/N**: 5개 자산에 각 1/5.
+- **60:40**: 주식군(`SPY·EWY`) 60% : 안전자산군(`TLT·GLD·SHV`) 40%, **그룹 내부는 균등분배**
+  (SPY 30%/EWY 30%, TLT·GLD·SHV 각 13.33%). 별도 근거(시가총액 등) 없이 임의 가중치를
+  주는 것보다 "정직한 검증"(CLAUDE.md §1) 취지에 맞아 균등분배로 확정했다(회의 전 임시
+  확정, 이견 있으면 재논의).
+
+### B&H (매수후보유) — 리밸런싱 없음, 실제 드리프트 계산
+"오늘 목표비중을 정하지 않는다"는 것 자체가 이 전략의 정의이므로, 매일
+`new_weights = 오늘 실제 보유 비중`으로 두어 `prev_weights`와 동일하게 만들어
+`turnover=0`/`cost=0`을 보장한다. 그 "실제 보유 비중"은 이 모듈이
+
+```
+w_i,t+1 = w_i,t · (1+r_i,t) / (1 + Σ w_i,t·r_i,t)
+```
+
+공식으로 직접 드리프트시켜 다음 날의 `new_weights`로 사용한다. engine.py에 넘기는
+prev/new_weights를 "그대로 이어받는" 규약은 그대로 지키면서, 그 이어받는 값 자체를
+B&H 정의에 맞게 매일 드리프트시키는 것이라 규약 위반이 아니다.
+
+engine.py가 start-of-day 리밸런싱(새 비중이 그날 수익을 바로 실현)이므로, 첫날 진입한
+초기 목표비중도 **진입 당일 수익률부터** 드리프트를 시작한다(둘째 날부터가 아니다).
+
+### 자산 순서 검증
+`price_returns`(pd.DataFrame)의 컬럼은 `config.assets` 순서와 정확히 일치해야 하며,
+다르면 `ValueError`를 던진다(`PortfolioEnv`의 컬럼 검증과 동일한 관례).
 
 ---
 
@@ -106,3 +150,4 @@ new_nav = nav_after_cost × (1 + Σ(new_wᵢ × rᵢ))
 |---|---|---|
 | v0.1 | 2026-07-01 | 최초 작성. NAV 갱신·수수료 차감 로직 구현 반영. |
 | v0.2 | 2026-07-08 | 리밸런싱 시점을 end-of-day → start-of-day로 변경, env와 관점 통일. 완전 리밸런싱(드리프트 무시) 가정 명시. |
+| v0.3 | 2026-07-11 | `benchmark.py`(1/N·60:40·B&H) 구현 반영. 60:40 그룹 내부 균등분배 확정, B&H 실제 드리프트 계산 로직 명시. |
