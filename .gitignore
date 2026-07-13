@@ -40,6 +40,8 @@ MANIFEST
 .env.*
 !.env.example
 *.pem
+*.crt
+*.key
 secrets.yaml
 
 # ===== 데이터 산출물 (CLAUDE.md §7) =====
