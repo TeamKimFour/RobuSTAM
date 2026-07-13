@@ -45,7 +45,7 @@
 | Data Engineering | yfinance, pandas, numpy, pandas-ta, Apache Arrow(Parquet), SQLite |
 | RL / Modeling | Gymnasium(커스텀 환경), Stable-Baselines3(PPO→SAC), PyTorch, MLflow |
 | Backend / Serving | FastAPI, Pydantic, uvicorn, 자체 백테스트 엔진, 멀티 벤치마크 모듈 |
-| Frontend | Vercel, Plotly, quantstats, (Streamlit 대시보드) |
+| Frontend | Next.js(Vercel 배포), React, Plotly.js, quantstats |
 | DevOps | Docker / Docker Compose, GitHub Actions, Airflow/cron, RunPod(GPU) |
 | 협업 | Git/GitHub, Notion(문서), Discord(알림) |
 
@@ -146,7 +146,7 @@ RobuSTAM/
 │   ├── models/              # [도현] RL 학습(PPO→SAC), 정책, MLflow 연동
 │   ├── backtest/            # [찬휘] 백테스트 엔진, 멀티 벤치마크(1/N·60:40·B&H)
 │   └── api/                 # [도현] FastAPI 추론 서버 (상태→익일 비중)
-├── frontend/                # [형우] Plotly 대시보드 (Vercel 배포)
+├── frontend/                # [형우] Next.js 대시보드 (Plotly.js, Vercel 배포)
 ├── notebooks/               # 실험·분석 노트북
 ├── tests/                   # 단위·통합 테스트
 ├── mlruns/                  # (gitignore) MLflow 실험 추적
