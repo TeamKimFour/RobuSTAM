@@ -90,3 +90,13 @@ def get_precompute_path(cfg: dict) -> str:
     (docs/data_pipeline.md §8 계약).
     """
     return cfg.get("data", {}).get("precompute_path", "data/precompute/latest.json")
+
+
+def get_inference(cfg: dict) -> dict:
+    """추론(precompute)이 쓸 설정을 반환한다 — 모델 경로·정규화 통계 출처·버전.
+
+    어느 policy(model_path)를 어느 build 통계(scaler_run_id/fold_id)로 정규화 재현할지
+    지정한다. 이 값은 학습 provenance(도현 train.py가 기록하는 build run_id/fold_id)와
+    일치해야 추론 정규화가 학습과 동일하게 재현된다(docs/data_pipeline.md §8).
+    """
+    return cfg.get("inference", {})
