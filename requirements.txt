@@ -21,6 +21,7 @@ boto3==1.43.44
 # 추론 API (FastAPI 서빙 — src/api/)
 fastapi==0.139.0
 uvicorn==0.51.0
+pydantic==2.13.4     # src/api/schemas.py 응답 검증에서 직접 import
 
 # RL 환경 (Softmax·거래비용·슬리피지는 src/env에서 처리)
 gymnasium==1.0.0

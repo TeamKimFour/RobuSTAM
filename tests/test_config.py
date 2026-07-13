@@ -40,6 +40,17 @@ def test_basic_getters():
     assert cl.get_transaction_cost(cfg) == 0.001
 
 
+def test_get_precompute_path_default_when_missing():
+    """data 섹션이 없는 fake cfg에서도 기본 경로를 반환해야 한다."""
+    assert cl.get_precompute_path(_fake_cfg()) == "data/precompute/latest.json"
+
+
+def test_get_precompute_path_reads_data_section():
+    cfg = _fake_cfg()
+    cfg["data"] = {"precompute_path": "data/precompute/custom.json"}
+    assert cl.get_precompute_path(cfg) == "data/precompute/custom.json"
+
+
 def test_validate_rejects_wrong_asset_order():
     bad = _fake_cfg()
     bad["assets"] = ["EWY", "SPY", "TLT", "GLD", "SHV"]
@@ -60,3 +71,4 @@ def test_load_real_config_file():
     assert cl.get_state_dim(cfg) == 187
     assert cl.get_assets(cfg) == ["SPY", "EWY", "TLT", "GLD", "SHV"]
     assert cl.get_transaction_cost(cfg) == 0.001
+    assert cl.get_precompute_path(cfg) == "data/precompute/latest.json"
