@@ -75,6 +75,9 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
   (`write_features / load_features / partition_path`) + SQLite 메타
   (`init_meta_db / write_run / write_feature_columns / write_fold / read_*`). I/O 골격 구현 완료,
   실데이터는 2주차 지표·정규화 후 채움.
+- **`inference/precompute.py`** — 오늘 State→익일 비중(`latest.json`) 생산자(§8). `build_today_obs`
+  (민지: 오늘 정규화 187 obs) + `generate_latest`(도현: predict→softmax→원자적 기록). `config.inference`가
+  정규화 통계 출처를 지정. 실행 `python -m src.inference.precompute`.
 
 ---
 
@@ -216,15 +219,41 @@ jupyter lab notebooks/eda_raw_prices.ipynb
 | `model_version` | 사용된 모델 버전 (`docs/db_schema.md`의 `model_versions.model_name`과 매칭 가능) |
 | `weights` | 자산 티커 → 비중. **키 집합은 `config.yaml`의 `assets`와 정확히 일치해야 하고 값의 합은 1**(API가 요청마다 검증) |
 
-### 계약 검증 (`src/api/main.py::get_latest_inference`)
-- 파일이 없으면 **503**을 반환한다 — precompute가 아직 안 돌았다는 정상 상태이지 버그가 아니다(1주차 현재
-  precompute는 미구현 상태).
-- `weights`의 자산 키가 `config.yaml`과 다르거나 합이 1에서 벗어나면 **500**을 반환해 파이프라인 오류를
-  조기에 드러낸다.
+### 생산자 구현 — `src/inference/precompute.py` (민지·도현 접점)
+계약은 민지가 확정한다. 두 함수로 나뉜다:
 
-### 아직 정해지지 않은 것 (민지 precompute 구현 시 확정 필요)
-- daily.yml에 precompute 스텝 추가 시점(모델 학습 파이프라인·`src/models/` 완성 후)
-- 배치 실패 시 이전 `latest.json`을 유지할지, 파일을 지울지(현재 API는 파일이 있으면 무조건 최신으로 신뢰)
+- **`build_today_obs(cfg, prev_weights=None) -> (obs, date)`** (민지 책임 — 데이터 글루)
+  - `build.py`와 동일 체인(수집 캐시→로그수익률→지표→187 조립)으로 **마지막 행**을 취한다.
+    전체 원시로 계산해 마지막 행이 build 산출물과 **정확히 일치**한다(정규화 재현 대조 가능).
+  - 정규화 재현: `config inference.scaler_run_id/fold_id`가 가리키는 fold의 `scaler_stats`를
+    `read_scaler_stats`→`ZScoreScaler.from_stats_rows`로 복원해 학습과 동일한 z-score를 적용
+    (룩어헤드 없음). prev_weight 5칸은 `prev_weights`(정규화 안 함), `None`이면 SHV 100% 콜드스타트.
+  - 반환 `obs`: `float32`, shape `(state_dim,)`, 컬럼순서 `schema.feature_names(W)`.
+- **`generate_latest(cfg, model=None) -> dict`** (도현 책임 — 모델 파트)
+  - 직전 `latest.json`에서 prev 비중을 읽어 `build_today_obs` 호출 → `PPO.load(inference.model_path)`
+    → `predict` → `portfolio_env._softmax`(학습 step과 동일) → 아래 스키마로 **원자적 기록**(tmp→rename).
+  - `model` 미지정 시 config에서 로드(테스트는 목 모델 주입). 실행 `python -m src.inference.precompute`.
+
+### `inference` 설정 (`config.yaml`)
+어느 policy를 어느 build 통계로 정규화 재현할지 지정한다 — **학습 provenance와 값이 일치해야 한다**:
+| 키 | 의미 |
+|---|---|
+| `model_path` | 배포 policy.zip 경로 (도현이 배포 확정 후 채움) |
+| `scaler_run_id` | 그 policy가 학습된 build `run_id` (meta.sqlite `scaler_stats` 조회 키) |
+| `scaler_fold_id` | 그 policy가 학습된 `fold_id` |
+| `model_version` | `latest.json`에 기록되는 버전 태그 |
+
+> **도현 숙제**: `train.py`가 policy 저장 시 사용한 build `run_id`/`fold_id`를 MLflow/파일명에 기록해
+> 위 `scaler_run_id`/`scaler_fold_id`와 일치시켜야 한다(현재 미기록 → 통합 시 배선).
+
+### 계약 검증 (`src/api/main.py::get_latest_inference`)
+- 파일이 없으면 **503**을 반환한다 — precompute가 아직 안 돌았다는 정상 상태이지 버그가 아니다.
+- `weights`의 자산 키가 `config.yaml`과 다르거나 합이 1에서 벗어나면 **500**을 반환해 파이프라인 오류를
+  조기에 드러낸다. (생산자는 원자적 기록으로 부분쓰기 상태의 파일 노출을 방지한다.)
+
+### 아직 정해지지 않은 것
+- daily.yml precompute 스텝 활성 시점 — 도현 실제 policy.zip + `inference` 값 확정 후(§작업④).
+- 배치 실패 시 이전 `latest.json` 유지 여부(현재는 원자적 덮어쓰기라 성공 시에만 교체).
 
 ---
 
@@ -237,3 +266,4 @@ jupyter lab notebooks/eda_raw_prices.ipynb
 | v0.4 | 2026-07-03 | walk-forward 분할·z-score 정규화·build 오케스트레이터 구현. Feature Store 실데이터 적재 + targets. |
 | v0.5 | 2026-07-09 | 배포 준비 반영: Docker 이미지·S3 업로드(s3_sync)·일일 워크플로(daily.yml). 실제 클라우드 연결 대기. |
 | v0.6 | 2026-07-13 | precompute latest.json 계약(§8) 추가 — src/api/main.py 추론 엔드포인트 구현과 함께. |
+| v0.7 | 2026-07-13 | precompute 생산자 구현(`src/inference/precompute.py`)·`config.inference` 섹션 반영. build_today_obs(민지 글루)·generate_latest(도현 모델 파트) 접점 계약 확정. |
