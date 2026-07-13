@@ -72,3 +72,12 @@ def test_load_real_config_file():
     assert cl.get_assets(cfg) == ["SPY", "EWY", "TLT", "GLD", "SHV"]
     assert cl.get_transaction_cost(cfg) == 0.001
     assert cl.get_precompute_path(cfg) == "data/precompute/latest.json"
+
+
+def test_model_fold_id_default_is_one_indexed():
+    """src/data/splits.py::make_folds가 fold_id를 1부터 매겨서(fold=0 없음),
+    config.model.fold_id 기본값도 1이어야 한다 (회귀 테스트: 한때 0으로 잘못
+    설정돼 RunPod 실행 중 FileNotFoundError가 났었음 — docs/model_training.md §4-5)."""
+    pytest.importorskip("yaml")
+    cfg = cl.load_config("config/config.yaml")
+    assert cfg["model"]["fold_id"] == 1

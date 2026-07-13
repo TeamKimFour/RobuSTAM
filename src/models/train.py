@@ -127,7 +127,8 @@ def train(
         # 1차 알고리즘은 PPO로 확정(CLAUDE.md §3). SAC 비교는 별도 스크립트로 추가할 것.
         raise NotImplementedError(f"현재는 PPO만 지원합니다: {algorithm!r}")
 
-    fold_id = fold_id if fold_id is not None else int(model_cfg.get("fold_id", 0))
+    # fold_id는 1부터 시작한다 (src/data/splits.py::make_folds가 1-indexed로 생성).
+    fold_id = fold_id if fold_id is not None else int(model_cfg.get("fold_id", 1))
     total_timesteps = (
         total_timesteps if total_timesteps is not None else int(model_cfg.get("total_timesteps", 200_000))
     )

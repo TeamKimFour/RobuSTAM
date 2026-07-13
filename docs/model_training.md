@@ -81,6 +81,13 @@ softmax는 스케일에 민감하다. 로짓 범위가 좁으면(예: ±1) 정�
 선호까지 표현 가능해 실용적 상한으로 충분하다. 필요 시 `config.model.action_bound`만
 바꾸면 된다(코드 변경 불필요).
 
+### 4-5. fold_id는 1부터 시작 (0 아님)
+`src/data/splits.py::make_folds`가 `enumerate(test_blocks, start=1)`로 fold를 생성해
+`fold=1`, `fold=2`, `fold=3` 파티션이 만들어진다. 초기 구현 때 `config.model.fold_id`
+기본값을 `0`으로 잘못 넣어 `FileNotFoundError: fold=0/split=train/part.parquet`가
+났다(RunPod 실전 실행 중 발견). 기본값을 `1`로 수정했다 — fold_id를 지정할 때는
+항상 1부터 시작한다는 점에 주의.
+
 ---
 
 ## 5. 실행
@@ -91,7 +98,7 @@ softmax는 스케일에 민감하다. 로짓 범위가 좁으면(예: ±1) 정�
 python -m src.data.collect
 python -m src.data.build
 
-# 1) 기본 config로 학습 (fold_id=0, total_timesteps=200000 — config.model 기본값)
+# 1) 기본 config로 학습 (fold_id=1, total_timesteps=200000 — config.model 기본값)
 python -m src.models.train
 
 # 2) fold·timesteps 오버라이드

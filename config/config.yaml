@@ -67,11 +67,12 @@ normalize:
   eps: 1.0e-8                    # 표준편차 0 가드(SHV 등 상수 컬럼)
 
 # ── RL 학습 (src/models/train.py, RunPod GPU 실행 대상) ──
-# 1차 알고리즘은 PPO(CLAUDE.md §3). fold_id는 §4-1 walk-forward 분할의 인덱스(0=Fold1).
+# 1차 알고리즘은 PPO(CLAUDE.md §3). fold_id는 §4-1 walk-forward 분할의 인덱스
+# (src/data/splits.py::make_folds가 1부터 매김 — 1=Fold1, 0은 존재하지 않음).
 model:
   algorithm: "PPO"
   policy: "MlpPolicy"
-  fold_id: 0
+  fold_id: 1
   total_timesteps: 200000
   seed: 42
   action_bound: 10.0                   # SB3용 유한 bound (env 자체는 -inf~+inf 로짓, train.py가 래핑)
