@@ -65,3 +65,16 @@ normalize:
   returns_scope: "per_asset"    # 수익률 150칸은 자산당 단일 평균·표준편차로 정규화
   feature_scope: "per_column"   # 지표·시장 칸은 컬럼별로 정규화
   eps: 1.0e-8                    # 표준편차 0 가드(SHV 등 상수 컬럼)
+
+# ── RL 학습 (src/models/train.py, RunPod GPU 실행 대상) ──
+# 1차 알고리즘은 PPO(CLAUDE.md §3). fold_id는 §4-1 walk-forward 분할의 인덱스(0=Fold1).
+model:
+  algorithm: "PPO"
+  policy: "MlpPolicy"
+  fold_id: 0
+  total_timesteps: 200000
+  seed: 42
+  action_bound: 10.0                   # SB3용 유한 bound (env 자체는 -inf~+inf 로짓, train.py가 래핑)
+  mlflow_tracking_uri: "mlruns"        # 로컬 파일 스토어 (CLAUDE.md 스택: MLflow)
+  mlflow_experiment: "robustam-ppo"
+  model_dir: "mlruns/models"           # 학습된 policy.zip 저장 위치

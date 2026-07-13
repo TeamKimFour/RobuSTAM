@@ -1,0 +1,3 @@
+# 셸 스크립트는 Windows 체크아웃에서도 항상 LF 유지 — CRLF면 Docker 컨테이너 안에서
+# 셔뱅(#!/bin/sh)이 깨진다("bad interpreter: /bin/sh^M: no such file or directory").
+*.sh text eol=lf

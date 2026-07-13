@@ -26,5 +26,13 @@ pydantic==2.13.4     # src/api/schemas.py 응답 검증에서 직접 import
 # RL 환경 (Softmax·거래비용·슬리피지는 src/env에서 처리)
 gymnasium==1.0.0
 
+# RL 학습 (PPO, src/models/train.py — RunPod GPU 실행 대상)
+torch==2.13.0
+stable-baselines3==2.9.0
+# mlflow(풀 패키지)는 pandas<3을 요구해 위 pandas==3.0.3과 충돌한다(직접 검증함).
+# mlflow-skinny는 동일한 `import mlflow` 네임스페이스의 경량 클라이언트로, 로컬 파일
+# 트래킹 스토어(log_params/log_metrics/log_artifact)엔 이거면 충분하고 충돌이 없다.
+mlflow-skinny==3.14.0
+
 # 테스트
 pytest==9.1.1
