@@ -86,6 +86,32 @@ S3_BUCKET=my-bucket S3_PREFIX=robustam python -m src.data.s3_sync
 > 매일 자동 실행: `.github/workflows/daily.yml`(KST 07:00 cron) → collect→build→(설정 시)S3 업로드.
 > 실제 S3 연결은 AWS role(`vars.AWS_ROLE_ARN`)·버킷(`vars.S3_BUCKET`) 설정 후 활성.
 
+## 백테스트 결과 S3 저장
+
+`BacktestEngine.save_results(nav, metrics, run_id)`를 호출하면 NAV·성과지표·config
+스냅샷을 S3에 저장한다. Feature Store 업로드(위 섹션)와 동일하게 `config.data.s3_bucket`
+(또는 환경변수 `S3_BUCKET`)을 쓰고, 버킷이 비어 있으면 자동 skip한다.
+
+```
+s3://{버킷}/backtests/{실행날짜}_{실행ID}/
+    nav.parquet    # NAV 시계열
+    metrics.json   # Sharpe·MDD 등 성과 지표
+    config.yaml    # 이 실행에 쓰인 config 원본 그대로
+```
+
+### 환경변수 설정 (AWS 자격증명)
+
+AWS 자격증명은 코드에 하드코딩하지 않고 `.env` 파일(`python-dotenv`가 자동 로드)과
+boto3 기본 자격증명 체인으로 처리한다.
+
+```bash
+cp .env.example .env
+# .env를 열어 AWS_ACCESS_KEY_ID·AWS_SECRET_ACCESS_KEY·AWS_DEFAULT_REGION 채우기
+```
+
+`.env`는 `.gitignore` 처리되어 있어 커밋되지 않는다. 배포 환경(EC2/ECS 등)에서는 `.env` 없이
+IAM Role을 쓰는 게 더 안전하다 — 그 경우 `.env` 값은 무시되고 Role 자격증명이 자동 적용된다.
+
 ## 테스트
 
 ```bash

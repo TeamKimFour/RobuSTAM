@@ -13,6 +13,7 @@
 | NAV 갱신 및 수수료 차감 | `src/backtest/engine.py` | ✅ 구현 |
 | 멀티 벤치마크 (1/N · 60:40 · B&H) | `src/backtest/benchmark.py` | ✅ 구현 |
 | walk-forward 백테스트 루프 | `src/backtest/runner.py` | ⏳ 3주차 |
+| 결과 저장 (S3) | `src/backtest/s3_results.py` | ✅ 구현 |
 | 결과 저장 (DB 연동) | `src/backtest/engine.py` | ⏳ 도현과 협의 후 |
 
 ---
@@ -45,6 +46,9 @@ AI 모델 (도현) → action (자산 비중 벡터, ∑wᵢ=1)
 - **`benchmark.py`** — 1/N·60:40·B&H 세 벤치마크를 거래일 단위로 `calc_nav()`를 반복
   호출해 NAV 곡선(pd.DataFrame)으로 만든다. 자산 목록은 `config.yaml`에서 읽고,
   `price_returns`의 컬럼 순서가 이와 다르면 예외를 던진다(CLAUDE.md §2 자산 순서 고정).
+- **`s3_results.py`** — 백테스트 실행 결과(NAV·성과지표·config 스냅샷)를 S3에 저장한다.
+  `calc_nav()` 로직과 무관한 독립 단계이며, `BacktestEngine.save_results()`가 위임한다.
+  `src/data/s3_sync.py`와 동일하게 자격증명은 boto3 기본 자격증명 체인에서 읽는다.
 
 ---
 
@@ -117,6 +121,35 @@ engine.py가 start-of-day 리밸런싱(새 비중이 그날 수익을 바로 실
 
 ---
 
+## 4-2. 백테스트 결과 S3 저장 (`src/backtest/s3_results.py`)
+
+`BacktestEngine.save_results(nav, metrics, run_id, ...)`를 호출하면 내부적으로
+`save_results_to_s3()`에 위임한다. `calc_nav()`는 전혀 건드리지 않는, 완전히 독립된
+저장 단계다.
+
+### 저장 구조
+```
+s3://{버킷}/backtests/{실행날짜}_{실행ID}/
+    nav.parquet    - NAV 시계열
+    metrics.json   - Sharpe·MDD 등 성과 지표 (계산은 호출자 책임 — 이 모듈은 저장만 한다)
+    config.yaml    - 이 실행에 쓰인 config 파일 원본 그대로 복사(바이트 단위 그대로)
+```
+`실행날짜`는 UTC 기준 `YYYYMMDD`(override 가능), `실행ID`는 생략 시 짧은 UUID를
+자동 생성한다(MLflow run id 등 호출자가 원하는 값을 넘겨도 된다).
+
+### 버킷 설정
+`src/data/s3_sync.py`와 동일한 관례: **버킷을 새로 추가하지 않고 `config.data.s3_bucket`을
+재사용**한다(환경변수 `S3_BUCKET`이 있으면 그것을 우선). 버킷이 비어 있으면(아직 미생성)
+저장을 조용히 skip한다 — 로컬 개발 중엔 무해하다.
+
+### 자격증명
+AWS 자격증명은 코드에 절대 하드코딩하지 않는다. `.env.example`을 복사해 `.env`를 만들고
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_DEFAULT_REGION`을 채우면
+`python-dotenv`가 로드해 boto3 기본 자격증명 체인에 흘려보낸다. 배포 환경에서는 `.env` 없이
+IAM Role을 쓰는 게 더 안전하다(이 경우 `.env` 값은 무시되고 Role 자격증명이 자동 적용).
+
+---
+
 ## 5. 설계 결정
 
 ### 5-1. 거래비용률 — config.yaml 단일 출처
@@ -140,7 +173,8 @@ engine.py가 start-of-day 리밸런싱(새 비중이 그날 수익을 바로 실
 | `src/env/` | 형우 | Softmax 정규화, 슬리피지 반영 |
 | `src/models/` | 도현 | action (자산 비중 벡터) 생성 |
 | `src/api/` | 도현 | `execution_log` DB 스키마 협의 필요 |
-| `config/config.yaml` | 공용 | `transaction_cost`, `assets` |
+| `config/config.yaml` | 공용 | `transaction_cost`, `assets`, `data.s3_bucket` |
+| `src/data/s3_sync.py` | 민지 | 동일한 S3 버킷·자격증명 관례 공유(Feature Store 업로드) |
 
 ---
 
@@ -151,3 +185,4 @@ engine.py가 start-of-day 리밸런싱(새 비중이 그날 수익을 바로 실
 | v0.1 | 2026-07-01 | 최초 작성. NAV 갱신·수수료 차감 로직 구현 반영. |
 | v0.2 | 2026-07-08 | 리밸런싱 시점을 end-of-day → start-of-day로 변경, env와 관점 통일. 완전 리밸런싱(드리프트 무시) 가정 명시. |
 | v0.3 | 2026-07-11 | `benchmark.py`(1/N·60:40·B&H) 구현 반영. 60:40 그룹 내부 균등분배 확정, B&H 실제 드리프트 계산 로직 명시. |
+| v0.4 | 2026-07-13 | `s3_results.py`(백테스트 결과 S3 저장) 구현 반영. `BacktestEngine.save_results()` 추가, 버킷은 `data.s3_bucket` 재사용. |

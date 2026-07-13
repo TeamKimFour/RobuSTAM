@@ -5,6 +5,7 @@ config 로드는 _fake_cfg를 통해 실제 파일 없이도 실행된다.
 """
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from src.backtest.engine import BacktestEngine
@@ -89,3 +90,27 @@ def test_nav_calculation_is_correct(engine):
 
     assert new_nav == pytest.approx(expected_nav)
     assert cost == pytest.approx(expected_cost)
+
+
+def test_save_results_delegates_to_s3_results(engine):
+    """save_results()가 자신의 config_path를 그대로 넘겨 s3_results에 위임하는지 확인."""
+    pytest.importorskip("boto3")
+    pytest.importorskip("moto")
+
+    import boto3
+    from moto import mock_aws
+
+    nav = pd.DataFrame({"nav": [1_000_000.0, 1_010_000.0]})
+
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket="robustam-test")
+
+        prefix = engine.save_results(
+            nav, {"sharpe": 1.0}, run_id="e2e1", bucket="robustam-test", client=s3
+        )
+
+        assert prefix is not None
+        keys = {o["Key"] for o in s3.list_objects_v2(Bucket="robustam-test")["Contents"]}
+        assert f"{prefix}/nav.parquet" in keys
+        assert f"{prefix}/config.yaml" in keys

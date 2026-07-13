@@ -20,6 +20,7 @@ class BacktestEngine:
         config_path  : config.yaml 경로
         """
         self.initial_nav = initial_nav
+        self.config_path = config_path
         cfg = load_config(config_path)
         self.transaction_cost = get_transaction_cost(cfg)
 
@@ -63,3 +64,22 @@ class BacktestEngine:
         new_nav = nav_after_cost * (1 + np.dot(new_weights, price_returns))
 
         return new_nav, cost
+
+    def save_results(
+        self,
+        nav: pd.DataFrame,
+        metrics: dict,
+        run_id: str | None = None,
+        *,
+        bucket: str | None = None,
+        client=None,
+    ) -> str | None:
+        """백테스트 실행 결과를 S3에 저장한다 (src.backtest.s3_results에 위임).
+
+        calc_nav()와는 무관한 별도 단계 — 백테스트 루프가 모두 끝난 뒤 호출한다.
+        """
+        from src.backtest.s3_results import save_results_to_s3
+
+        return save_results_to_s3(
+            nav, metrics, run_id, self.config_path, bucket=bucket, client=client
+        )

@@ -15,8 +15,9 @@ pandas-ta==0.4.71b0
 # 설정
 pyyaml==6.0.3
 
-# 클라우드 저장 (Feature Store S3 업로드 — s3_sync)
+# 클라우드 저장 (Feature Store·백테스트 결과 S3 업로드 — s3_sync·backtest/s3_results)
 boto3==1.43.44
+python-dotenv==1.2.2   # .env 파일을 환경변수로 로드 (AWS 자격증명 등)
 
 # 추론 API (FastAPI 서빙 — src/api/)
 fastapi==0.139.0
