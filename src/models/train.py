@@ -78,28 +78,50 @@ def load_fold_env(cfg: dict, fold_id: int, split: str = "train") -> gym.Env:
     return _BoundedActionWrapper(env, bound=bound)
 
 
+TRADING_DAYS_PER_YEAR = 252  # 일봉 → 연율화 상수 (docs/state_spec.md·CLAUDE.md 데일리 리밸런싱)
+
+
+def _annualized_sharpe(rewards: list[float]) -> float:
+    """스텝별 net 로그보상 시계열의 연율화 Sharpe proxy = mean/std × √252.
+
+    무위험수익률 0 가정(보상 자체가 비용 차감 로그수익). 스텝이 2개 미만이거나
+    표준편차가 0이면 위험조정을 정의할 수 없어 0.0을 반환한다. 배포 policy 선택
+    (src/models/select.py)의 기본 지표로, 단순 누적수익 대신 위험조정수익을 본다는
+    프로젝트 철학(CLAUDE.md §1 샤프 극대화)을 따른다. 정식 성과검증은 여전히 찬휘
+    백테스트 엔진 몫이며, 여기 값은 후보 policy 간 방향성 선별용 근사다.
+    """
+    if len(rewards) < 2:
+        return 0.0
+    arr = np.asarray(rewards, dtype=np.float64)
+    std = float(arr.std(ddof=1))
+    if std == 0.0:
+        return 0.0
+    return float(arr.mean() / std * np.sqrt(TRADING_DAYS_PER_YEAR))
+
+
 def evaluate(model, cfg: dict, fold_id: int, split: str = "valid") -> dict:
     """정책을 결정적으로 1 에피소드 굴려 요약 지표를 낸다.
 
     학습 중 조기 확인용이며, 정식 성과 검증은 찬휘 백테스트 엔진(docs/backtest_engine.md)이
-    맡는다 — 여기서는 같은 reward 계산을 재사용해 방향성만 빠르게 본다.
+    맡는다 — 여기서는 같은 reward 계산을 재사용해 방향성만 빠르게 본다. `{split}_sharpe`는
+    배포 policy 선택(select.py)의 기본 지표다.
     """
     env = load_fold_env(cfg, fold_id, split)
     obs, _ = env.reset()
-    total_reward = 0.0
+    rewards: list[float] = []  # 스텝별 net 로그보상 R_t (Sharpe 산출용 시계열)
     total_cost = 0.0
     total_turnover = 0.0
-    n_steps = 0
     terminated = truncated = False
     while not (terminated or truncated):
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, terminated, truncated, info = env.step(action)
-        total_reward += float(reward)
+        rewards.append(float(reward))
         total_cost += float(info["cost"])
         total_turnover += float(info["turnover"])
-        n_steps += 1
+    n_steps = len(rewards)
     return {
-        f"{split}_total_log_return": total_reward,
+        f"{split}_total_log_return": float(sum(rewards)),
+        f"{split}_sharpe": _annualized_sharpe(rewards),
         f"{split}_total_txn_cost": total_cost,
         f"{split}_avg_turnover": total_turnover / max(n_steps, 1),
         f"{split}_n_steps": float(n_steps),

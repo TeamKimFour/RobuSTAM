@@ -14,7 +14,7 @@ import yaml
 
 from src.data import feature_store as fs
 from src.data import schema
-from src.models.train import evaluate, load_fold_env
+from src.models.train import _annualized_sharpe, evaluate, load_fold_env
 
 ASSETS = ["SPY", "EWY", "TLT", "GLD", "SHV"]
 FWD_RET_COLS = [f"fwd_ret_{a}" for a in ASSETS]
@@ -55,6 +55,20 @@ class _FakeModel:
         return np.zeros(len(ASSETS), dtype=np.float32), None
 
 
+def test_annualized_sharpe_edge_cases():
+    # 스텝 2개 미만 → 위험조정 정의 불가 → 0.0
+    assert _annualized_sharpe([]) == 0.0
+    assert _annualized_sharpe([0.01]) == 0.0
+    # 표준편차 0(상수 보상) → 0.0 (div-by-zero 가드)
+    assert _annualized_sharpe([0.01, 0.01, 0.01]) == 0.0
+    # 정상: 양의 평균·양의 분산 → 양수 Sharpe, √252 연율화 반영
+    s = _annualized_sharpe([0.01, 0.02, 0.03])
+    assert s > 0
+    arr = np.array([0.01, 0.02, 0.03])
+    expected = arr.mean() / arr.std(ddof=1) * np.sqrt(252)
+    assert s == pytest.approx(expected)
+
+
 def test_load_fold_env_reads_feature_store(tmp_path):
     out_dir = str(tmp_path / "feature_store")
     _write_fake_fold(out_dir, fold_id=0, split="train", window=30, n_rows=10)
@@ -86,6 +100,9 @@ def test_evaluate_runs_full_episode_with_stub_model(tmp_path):
     assert metrics["valid_n_steps"] == n_rows - 1
     assert "valid_total_log_return" in metrics
     assert "valid_total_txn_cost" in metrics
+    # valid_sharpe(위험조정수익 proxy)는 항상 유한해야 한다 (선택 로직 기본 지표).
+    assert "valid_sharpe" in metrics
+    assert np.isfinite(metrics["valid_sharpe"])
     # 균등 로짓(0벡터) → softmax는 균등비중. 초기 SHV 100%에서 균등비중으로 첫 스텝에 회전 발생.
     assert metrics["valid_avg_turnover"] > 0
 
