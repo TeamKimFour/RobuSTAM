@@ -99,11 +99,17 @@ def test_train_end_to_end_with_stable_baselines3(tmp_path):
     _write_fake_fold(out_dir, fold_id=0, split="train", window=30, n_rows=40, seed=1)
     _write_fake_fold(out_dir, fold_id=0, split="valid", window=30, n_rows=10, seed=2)
 
+    # 이 fold를 만든 build run_id를 메타DB에 심어, train이 provenance로 집어오는지 본다.
+    meta_db = str(tmp_path / "feature_store" / "meta.sqlite")
+    fs.init_meta_db(meta_db)
+    fs.write_run(meta_db, "build-xyz", "2026-06-28T00:00:00", "abc123", 30, 187, ASSETS)
+    fs.write_fold(meta_db, "build-xyz", {"fold_id": 0, "mode": "expanding"})
+
     cfg = {
         "assets": ASSETS,
         "window": 30,
         "transaction_cost": 0.001,
-        "data": {"feature_store_dir": out_dir},
+        "data": {"feature_store_dir": out_dir, "meta_db": meta_db},
         "model": {
             "algorithm": "PPO",
             "policy": "MlpPolicy",
@@ -126,3 +132,6 @@ def test_train_end_to_end_with_stable_baselines3(tmp_path):
     assert "run_id" in result
     assert result["fold_id"] == 0
     assert Path(result["model_path"]).is_file()
+    # provenance(이슈 #27): build run_id가 결과·모델 파일명에 반영돼야 한다.
+    assert result["feature_store_run_id"] == "build-xyz"
+    assert "build-xyz" in Path(result["model_path"]).name

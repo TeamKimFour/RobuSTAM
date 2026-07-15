@@ -87,6 +87,41 @@ def test_init_idempotent(tmp_path):
     fs.init_meta_db(db)  # 재호출해도 에러 없어야 함
 
 
+# ── build run_id provenance (이슈 #27) ──
+def _write_run_with_fold(db, run_id, created_at, fold_id):
+    fs.write_run(db, run_id, created_at, "abc123", 30, s.state_dim(30), list(s.ASSETS))
+    fs.write_fold(db, run_id, {
+        "fold_id": fold_id, "mode": "expanding",
+        "train_start": "2010-01-01", "train_end": "2019-12-31",
+        "valid_start": "2019-01-01", "valid_end": "2019-12-31",
+        "test_start": "2020-01-01", "test_end": "2021-12-31",
+        "embargo_days": 34,
+    })
+
+
+def test_latest_run_id_picks_newest_build(tmp_path):
+    db = str(tmp_path / "meta.sqlite")
+    fs.init_meta_db(db)
+    # 같은 fold=1을 두 번 빌드 — 최신 created_at의 run이 디스크 파티션의 주인이다.
+    _write_run_with_fold(db, "old-run", "2026-06-01T00:00:00", fold_id=1)
+    _write_run_with_fold(db, "new-run", "2026-06-28T00:00:00", fold_id=1)
+
+    assert fs.latest_run_id_for_fold(db, 1) == "new-run"
+
+
+def test_latest_run_id_none_when_fold_absent(tmp_path):
+    db = str(tmp_path / "meta.sqlite")
+    fs.init_meta_db(db)
+    _write_run_with_fold(db, "run1", "2026-06-28T00:00:00", fold_id=1)
+    # 기록되지 않은 fold는 None.
+    assert fs.latest_run_id_for_fold(db, 2) is None
+
+
+def test_latest_run_id_none_when_db_missing(tmp_path):
+    # 빌드 전(DB 파일 없음)이면 예외 없이 None.
+    assert fs.latest_run_id_for_fold(str(tmp_path / "nope.sqlite"), 1) is None
+
+
 def test_config_hash_detects_change():
     base = {"assets": list(s.ASSETS), "window": 30}
     same = {"assets": list(s.ASSETS), "window": 30}

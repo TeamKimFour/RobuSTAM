@@ -155,6 +155,32 @@ def read_folds(db_path: str, run_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def latest_run_id_for_fold(db_path: str, fold_id: int) -> str | None:
+    """해당 fold를 가장 최근에 빌드한 build run_id를 반환한다(없으면 None).
+
+    Parquet 파티션(`fold=<id>/split=...`)은 build()를 다시 돌릴 때마다 최신 run이
+    덮어쓰므로, 디스크의 그 fold 데이터는 항상 **가장 최근 build**의 산출물이다. 학습
+    provenance(어느 정규화 통계로 정규화됐나)는 그 최신 run_id를 가리켜야 하므로,
+    folds×runs를 조인해 `runs.created_at` 최신 행의 run_id를 고른다.
+
+    메타DB나 테이블이 아직 없으면(빌드 전) None을 돌려준다 — 학습이 이를 provenance
+    미상으로 처리할 수 있게 한다.
+    """
+    if not Path(db_path).is_file():
+        return None
+    with sqlite3.connect(db_path) as conn:
+        try:
+            row = conn.execute(
+                "SELECT f.run_id FROM folds f JOIN runs r ON f.run_id = r.run_id "
+                "WHERE f.fold_id=? ORDER BY r.created_at DESC, f.run_id DESC LIMIT 1",
+                (fold_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # folds/runs 테이블이 아직 생성되지 않은 경우(init 전) → provenance 미상.
+            return None
+    return row[0] if row else None
+
+
 def write_scaler_stats(
     db_path: str, run_id: str, fold_id: int, rows: list[tuple[str, float, float]]
 ) -> None:

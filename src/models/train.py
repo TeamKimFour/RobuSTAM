@@ -137,6 +137,13 @@ def train(
 
     env = load_fold_env(cfg, fold_id, "train")
 
+    # 학습에 쓰는 Feature Store fold를 만든 build run_id를 provenance로 확보한다(이슈 #27).
+    # 이 값이 있어야 추론(precompute)이 config.inference.scaler_run_id로 동일 정규화 통계를
+    # 재현할 수 있다. 미상(빌드 전 등)이면 "nofs"로 남겨 나중에 추적 불가함을 드러낸다.
+    meta_db = cfg.get("data", {}).get("meta_db")
+    fs_run_id = fs.latest_run_id_for_fold(meta_db, fold_id) if meta_db else None
+    fs_tag = fs_run_id or "nofs"
+
     mlflow.set_tracking_uri(_to_tracking_uri(model_cfg.get("mlflow_tracking_uri", "mlruns")))
     mlflow.set_experiment(model_cfg.get("mlflow_experiment", "robustam-ppo"))
 
@@ -149,6 +156,7 @@ def train(
                 "algorithm": algorithm,
                 "policy": policy,
                 "fold_id": fold_id,
+                "feature_store_run_id": fs_tag,  # 정규화 재현 출처(config.inference.scaler_run_id에 복사)
                 "total_timesteps": total_timesteps,
                 "window": cfg["window"],
                 "transaction_cost": cfg["transaction_cost"],
@@ -163,14 +171,20 @@ def train(
         model = PPO(policy, env, **ppo_kwargs)
         model.learn(total_timesteps=total_timesteps)
 
-        model_path = model_dir / f"ppo_fold{fold_id}_{run.info.run_id}.zip"
+        # 파일명에 build run_id를 박아, 어느 정규화 통계로 학습됐는지 파일만 봐도 알 수 있게 한다.
+        model_path = model_dir / f"ppo_fold{fold_id}_{fs_tag}_{run.info.run_id}.zip"
         model.save(str(model_path))
         mlflow.log_artifact(str(model_path))
 
         metrics = evaluate(model, cfg, fold_id, split="valid")
         mlflow.log_metrics(metrics)
 
-        result = {"run_id": run.info.run_id, "model_path": str(model_path), "fold_id": fold_id}
+        result = {
+            "run_id": run.info.run_id,
+            "model_path": str(model_path),
+            "fold_id": fold_id,
+            "feature_store_run_id": fs_run_id,  # 배포 시 config.inference.scaler_run_id에 넣을 값
+        }
         result.update(metrics)
         return result
 
@@ -187,3 +201,10 @@ if __name__ == "__main__":
     args = _parse_args()
     result = train(args.config, fold_id=args.fold_id, total_timesteps=args.total_timesteps)
     print(result)
+    # 배포용 안내: 이 policy를 서빙하려면 config.inference를 아래 값으로 채운다(이슈 #27).
+    print(
+        "\n[배포] config.inference에 복사:\n"
+        f"  model_path: {result['model_path']!r}\n"
+        f"  scaler_run_id: {result['feature_store_run_id']!r}\n"
+        f"  scaler_fold_id: {result['fold_id']}"
+    )

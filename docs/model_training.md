@@ -30,7 +30,7 @@ data/feature_store/fold=<id>/split=train  ──load_fold_env──>  PortfolioE
                                                         stable_baselines3.PPO.learn()
                                                                      │
                                               ┌──────────────────────┴───────────────────────┐
-                                        mlruns/models/ppo_fold<id>_<run_id>.zip          MLflow run
+                          mlruns/models/ppo_fold<id>_<build_run_id>_<mlflow_run_id>.zip     MLflow run
                                         (policy 아티팩트)                        (params·valid 지표·아티팩트)
 ```
 
@@ -47,6 +47,10 @@ data/feature_store/fold=<id>/split=train  ──load_fold_env──>  PortfolioE
 - **`train(config_path, fold_id, total_timesteps)`** — config `model` 섹션에서 하이퍼파라미터를
   읽어 PPO를 학습하고 MLflow run 안에서 파라미터·valid 지표·policy 아티팩트(`.zip`)를 기록한다.
   1차 알고리즘은 PPO만 지원(CLAUDE.md §3, SAC 시도 시 `algorithm` 분기 추가 필요).
+  학습 fold를 만든 build `run_id`를 `feature_store.latest_run_id_for_fold`로 조회해 MLflow
+  파라미터(`feature_store_run_id`)·모델 파일명·반환 dict에 provenance로 남긴다(이슈 #27) — 배포 시
+  `config.inference.scaler_run_id`에 그대로 넣어 추론 정규화를 학습과 일치시키기 위함. CLI 실행
+  끝에 `config.inference`에 복사할 값(`model_path`/`scaler_run_id`/`scaler_fold_id`)을 출력한다.
 - **`evaluate(model, cfg, fold_id, split)`** — 정책을 결정적으로 1 에피소드 굴려
   `{split}_total_log_return` 등을 요약한다. 학습 중 조기 확인용이며, 정식 성과 검증은
   찬휘 백테스트 엔진([docs/backtest_engine.md](backtest_engine.md))이 맡는다.
@@ -140,3 +144,4 @@ PyPI `torch` 휠이 CUDA 런타임을 포함하므로 별도 CUDA 베이스 이�
 | 버전 | 날짜 | 내용 |
 |---|---|---|
 | v0.1 | 2026-07-13 | 최초 작성. PPO 학습 스크립트·RunPod Dockerfile·mlflow-skinny 전환 근거 반영. |
+| v0.2 | 2026-07-15 | 이슈 #27: build `run_id` provenance 기록(MLflow `feature_store_run_id` 파라미터·모델 파일명 `ppo_fold<id>_<build_run_id>_<mlflow_run_id>.zip`). 배포 시 `config.inference.scaler_run_id`로 복사. |
