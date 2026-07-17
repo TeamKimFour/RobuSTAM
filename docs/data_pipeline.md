@@ -243,8 +243,13 @@ jupyter lab notebooks/eda_raw_prices.ipynb
 | `scaler_fold_id` | 그 policy가 학습된 `fold_id` |
 | `model_version` | `latest.json`에 기록되는 버전 태그 |
 
-> **도현 숙제**: `train.py`가 policy 저장 시 사용한 build `run_id`/`fold_id`를 MLflow/파일명에 기록해
-> 위 `scaler_run_id`/`scaler_fold_id`와 일치시켜야 한다(현재 미기록 → 통합 시 배선).
+> **build run_id provenance (이슈 #27, 구현 완료)**: `train.py`는 학습 시작 시 해당 fold를 가장
+> 최근에 빌드한 build `run_id`를 `feature_store.latest_run_id_for_fold(meta_db, fold_id)`로
+> 조회한다(파티션은 최신 build가 덮어쓰므로 `runs.created_at` 최신 run이 디스크의 주인). 그 값을
+> MLflow `feature_store_run_id` 파라미터와 모델 파일명(`ppo_fold{fold}_{build_run_id}_{mlflow_run_id}.zip`)에
+> 기록한다. 학습 종료 시 CLI가 `config.inference`에 넣을 `model_path`/`scaler_run_id`/`scaler_fold_id`를
+> 그대로 출력하므로, 배포할 policy를 정한 뒤 그 값을 `config.yaml`에 복사하면 추론 정규화가 학습과
+> 일치한다. (provenance 미상이면 `scaler_run_id` 자리에 `nofs`가 박혀 추적 불가함이 드러난다.)
 
 ### 계약 검증 (`src/api/main.py::get_latest_inference`)
 - 파일이 없으면 **503**을 반환한다 — precompute가 아직 안 돌았다는 정상 상태이지 버그가 아니다.
@@ -267,3 +272,4 @@ jupyter lab notebooks/eda_raw_prices.ipynb
 | v0.5 | 2026-07-09 | 배포 준비 반영: Docker 이미지·S3 업로드(s3_sync)·일일 워크플로(daily.yml). 실제 클라우드 연결 대기. |
 | v0.6 | 2026-07-13 | precompute latest.json 계약(§8) 추가 — src/api/main.py 추론 엔드포인트 구현과 함께. |
 | v0.7 | 2026-07-13 | precompute 생산자 구현(`src/inference/precompute.py`)·`config.inference` 섹션 반영. build_today_obs(민지 글루)·generate_latest(도현 모델 파트) 접점 계약 확정. |
+| v0.8 | 2026-07-15 | 이슈 #27: `train.py`가 학습 fold의 build `run_id`를 provenance로 기록(MLflow 파라미터·모델 파일명). `feature_store.latest_run_id_for_fold` 추가. 배포 시 `config.inference.scaler_run_id`에 복사. |
