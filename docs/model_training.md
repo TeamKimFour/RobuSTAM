@@ -13,7 +13,8 @@
 |---|---|---|
 | fold 환경 로더 | `src/models/train.py::load_fold_env` | ✅ 구현 |
 | PPO 학습 + MLflow 기록 | `src/models/train.py::train` | ✅ 구현 |
-| 간이 검증(valid split 1에피소드) | `src/models/train.py::evaluate` | ✅ 구현 |
+| 간이 검증(valid split 1에피소드, `valid_sharpe` 포함) | `src/models/train.py::evaluate` | ✅ 구현 |
+| 배포 policy 선택(valid 지표 최고 run) | `src/models/select.py::select_best_run` | ✅ 구현 |
 | 학습 컨테이너 | `docker/Dockerfile.train` | ✅ 구현 |
 | RunPod 실행 | — | ⏳ 실제 GPU 파드 실행은 팀원이 수행(계정·과금 필요) |
 | SAC 비교 | — | ⏳ 시간 여유 시(CLAUDE.md §3) |
@@ -52,8 +53,13 @@ data/feature_store/fold=<id>/split=train  ──load_fold_env──>  PortfolioE
   `config.inference.scaler_run_id`에 그대로 넣어 추론 정규화를 학습과 일치시키기 위함. CLI 실행
   끝에 `config.inference`에 복사할 값(`model_path`/`scaler_run_id`/`scaler_fold_id`)을 출력한다.
 - **`evaluate(model, cfg, fold_id, split)`** — 정책을 결정적으로 1 에피소드 굴려
-  `{split}_total_log_return` 등을 요약한다. 학습 중 조기 확인용이며, 정식 성과 검증은
-  찬휘 백테스트 엔진([docs/backtest_engine.md](backtest_engine.md))이 맡는다.
+  `{split}_total_log_return`·`{split}_sharpe`(연율화 위험조정수익 proxy = 스텝별 net
+  로그보상의 mean/std × √252)·비용·회전율을 요약한다. 학습 중 조기 확인용이며, 정식 성과
+  검증은 찬휘 백테스트 엔진([docs/backtest_engine.md](backtest_engine.md))이 맡는다.
+- **`select.select_best_run(cfg, metric, fold_id, higher_is_better)`** — MLflow 실험에서
+  `metric`(기본 `valid_sharpe`)이 가장 좋은 FINISHED run을 골라 배포 정보를 반환한다.
+  train.py 파일명 규약으로 `model_path`를 재구성하고, provenance 파라미터
+  (`feature_store_run_id`)를 그대로 실어 `config.inference`에 넣을 값을 만든다. §6 참고.
 
 ---
 
@@ -112,31 +118,80 @@ python -m src.models.train --fold-id 1 --total-timesteps 500000
 `config.model.mlflow_tracking_uri`(기본 `mlruns/`)에 남는다. `mlflow ui --backend-store-uri mlruns`
 로 로컬에서 대시보드 확인 가능(mlflow 풀 패키지 별도 설치 필요 — mlflow-skinny엔 UI 서버 없음).
 
-### RunPod (GPU)
-```bash
-# 1) 이미지 빌드 (로컬 또는 RunPod 빌드 환경)
-docker build -t robustam-train -f docker/Dockerfile.train .
+### RunPod
 
-# 2) GPU 파드에서 실행 — data/feature_store가 비어 있으면 collect→build를 자동으로 먼저 돈다
+RunPod 파드 **자체가 이미 컨테이너**라 대부분의 템플릿에는 Docker 데몬이 없다 — 파드 안에서
+`docker build`는 실패한다. 실제로는 두 경로 중 하나를 쓴다.
+
+**방법 A — 파드에서 소스 직접 실행 (간단, 레지스트리 불필요)**
+```bash
+git clone https://github.com/TeamKimFour/RobuSTAM.git && cd RobuSTAM
+pip install -r requirements.txt
+python -m src.data.collect
+python -m src.data.build
+python -m src.models.train --fold-id 1 --total-timesteps 200000
+```
+
+**방법 B — 커스텀 이미지 (로컬에 Docker가 있을 때)**
+```bash
+# 1) 로컬에서 빌드 후 레지스트리에 push
+docker build -t <user>/robustam-train -f docker/Dockerfile.train .
+docker push <user>/robustam-train
+# 2) RunPod에서 이 이미지로 파드를 생성 (파드 안에서 build하지 않는다)
+
+# 로컬에 GPU가 있다면 직접 실행도 가능
 docker run --gpus all \
   -v $PWD/data:/app/data \
   -v $PWD/mlruns:/app/mlruns \
-  robustam-train --fold-id 0 --total-timesteps 1000000
+  <user>/robustam-train --fold-id 1 --total-timesteps 1000000
 ```
-PyPI `torch` 휠이 CUDA 런타임을 포함하므로 별도 CUDA 베이스 이미지 없이도, RunPod가
-컨테이너에 GPU를 노출해주면(`--gpus all`, RunPod 템플릿에서 기본 지원) 그대로 GPU
-학습이 된다. RunPod 계정 생성·파드 기동·과금은 팀원이 직접 수행한다(자동화 범위 밖).
+
+> **fold_id는 1부터다.** `--fold-id 0`은 `FileNotFoundError: fold=0/split=train/part.parquet`로
+> 실패한다(§4-5). 예전 문서 예시가 `0`으로 적혀 있어 실제로 이 오류를 한 번 겪었다.
+
+**GPU가 필요한가 — 대개 아니다.** 정책망이 `MlpPolicy`(187차원 입력의 작은 MLP)라 SB3 공식
+권장대로 **CPU가 오히려 빠르다**(GPU는 커널 실행·전송 오버헤드가 이득을 넘어선다). 또한
+`requirements.txt`가 `torch==2.13.0`으로 핀돼 있어 PyTorch 템플릿의 사전설치 torch는 어차피
+재설치된다. 비용을 아끼려면 **CPU 파드**를 권한다. GPU 파드를 쓰더라도 PyPI `torch` 휠이 CUDA
+런타임을 포함하므로 별도 CUDA 베이스 이미지는 불필요하다.
+
+RunPod 계정 생성·파드 기동·과금은 팀원이 직접 수행한다(자동화 범위 밖). **작업이 끝나면 파드를
+Terminate**한다 — Stop 상태에서도 디스크 요금이 계속 나간다.
+
+### 배포 후보 여러 개 만들기
+`select.py`(§6)가 고를 후보를 만들려면 fold·seed를 바꿔 여러 번 학습한다.
+```bash
+for f in 1 2 3; do
+  for s in 42 7; do
+    python -m src.models.train --fold-id $f --seed $s --total-timesteps 200000
+  done
+done
+```
 
 ---
 
-## 6. 아직 정해지지 않은 것
+## 6. 배포 policy 선택 → config.inference (src/models/select.py)
 
-- **모델 선택 기준**: 여러 fold·seed로 학습한 policy 중 어떤 걸 precompute에 쓸지
-  (valid 지표 기준 선택 로직 미구현 — 현재는 매 학습이 독립 MLflow run으로만 쌓임).
-- **precompute 연동**: 학습된 `.zip`을 로드해 `docs/data_pipeline.md §8`의 latest.json을
-  생성하는 스크립트(민지 담당 영역과 접점, 모델 준비 후 착수).
-- **SAC 비교**: `train()`의 `algorithm` 분기가 현재 PPO만 지원 — SAC 추가 시 액션 래퍼는
-  그대로 재사용 가능(SB3 SAC도 유한 bound 요구는 동일).
+여러 fold·seed로 학습해 MLflow에 쌓인 run 중 **어떤 policy를 서빙할지**를 valid 지표로 고른다.
+기본 지표는 `valid_sharpe`(위험조정수익) — 단순 누적수익 대신 위험을 반영해 고른다는 프로젝트
+철학(CLAUDE.md §1)을 따른다. 여기 Sharpe는 후보 선별용 근사이고, 정식 성과검증은 찬휘 백테스트
+엔진 몫이다.
+
+```
+# 학습을 여러 번 쌓은 뒤, valid_sharpe 최고 run을 골라 배포값 출력
+python -m src.models.select                       # 전체 fold 대상
+python -m src.models.select --fold-id 1           # 특정 fold만
+python -m src.models.select --metric valid_total_log_return   # 지표 교체
+```
+
+출력된 `model_path`·`scaler_run_id`·`scaler_fold_id`·`model_version`을 `config.yaml`의
+`inference:` 섹션에 복사하면 precompute가 그 policy를 로드하고, provenance(`scaler_run_id`)로
+학습과 동일한 정규화를 재현한다(§4-5·이슈 #27). 선택된 run에 provenance가 없으면
+(`feature_store_run_id`=`nofs`) 경고를 내보내며, 재학습을 권장한다.
+
+> `select_best_run`은 MLflow 파라미터·지표만 읽고 아티팩트를 내려받지 않는다. `model_path`는
+> train.py 파일명 규약(`ppo_fold<id>_<build_run_id>_<mlflow_run_id>.zip`)으로 결정적으로
+> 재구성하므로, 공유 MLflow 서버(찬휘)로 옮겨도 파일명 규약만 유지되면 동작한다.
 
 ---
 
@@ -196,9 +251,20 @@ DQN MVP는 파이프라인 결선용이며, 성능 검증은 5주차 PPO(연속 
 
 ---
 
+## 8. 아직 정해지지 않은 것
+
+- **precompute 연동**: 학습된 `.zip`을 로드해 `docs/data_pipeline.md §8`의 latest.json을
+  생성하는 스크립트 — `src/inference/precompute.py`로 구현 완료, 남은 건 §6 선택값을
+  `config.inference`에 실제로 채우는 배포 단계.
+- **SAC 비교**: `train()`의 `algorithm` 분기가 현재 PPO만 지원 — SAC 추가 시 액션 래퍼는
+  그대로 재사용 가능(SB3 SAC도 유한 bound 요구는 동일).
+
+---
+
 ## 변경 이력
 | 버전 | 날짜 | 내용 |
 |---|---|---|
 | v0.1 | 2026-07-13 | 최초 작성. PPO 학습 스크립트·RunPod Dockerfile·mlflow-skinny 전환 근거 반영. |
 | v0.2 | 2026-07-15 | 이슈 #27: build `run_id` provenance 기록(MLflow `feature_store_run_id` 파라미터·모델 파일명 `ppo_fold<id>_<build_run_id>_<mlflow_run_id>.zip`). 배포 시 `config.inference.scaler_run_id`로 복사. |
 | v0.3 | 2026-07-18 | §7 추가: DQN MVP용 `DiscretePortfolioEnv` 어댑터(옵션 B, action_space=Discrete(9))·로짓 변환 계약·환경-에이전트 연결 스모크 테스트. |
+| v0.4 | 2026-07-18 | §6 추가: 배포 policy 선택 로직(`src/models/select.py`) — MLflow에서 `valid_sharpe` 최고 run 선택 → `config.inference` 값 출력. `evaluate`에 `valid_sharpe`(연율화 위험조정수익 proxy) 기록. `train.py --seed` 인자 추가(배포 후보 확장용). §5 RunPod 실행 절차 정정(`--fold-id 0`→`1`, 파드 내 `docker build` 불가·CPU 권장 명시). 미정 항목은 §8로 이동. |

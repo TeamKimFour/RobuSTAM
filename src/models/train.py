@@ -13,8 +13,9 @@ Feature Store의 특정 fold train split을 PortfolioEnv에 태워 Stable-Baseli
 따라오지 않게 하기 위함.
 
 실행:
-    python -m src.models.train                              # config 기본 fold·timesteps
+    python -m src.models.train                              # config 기본 fold·timesteps·seed
     python -m src.models.train --fold-id 1 --total-timesteps 500000
+    python -m src.models.train --fold-id 1 --seed 7         # 같은 fold의 배포 후보 추가
 """
 
 from __future__ import annotations
@@ -78,28 +79,50 @@ def load_fold_env(cfg: dict, fold_id: int, split: str = "train") -> gym.Env:
     return _BoundedActionWrapper(env, bound=bound)
 
 
+TRADING_DAYS_PER_YEAR = 252  # 일봉 → 연율화 상수 (docs/state_spec.md·CLAUDE.md 데일리 리밸런싱)
+
+
+def _annualized_sharpe(rewards: list[float]) -> float:
+    """스텝별 net 로그보상 시계열의 연율화 Sharpe proxy = mean/std × √252.
+
+    무위험수익률 0 가정(보상 자체가 비용 차감 로그수익). 스텝이 2개 미만이거나
+    표준편차가 0이면 위험조정을 정의할 수 없어 0.0을 반환한다. 배포 policy 선택
+    (src/models/select.py)의 기본 지표로, 단순 누적수익 대신 위험조정수익을 본다는
+    프로젝트 철학(CLAUDE.md §1 샤프 극대화)을 따른다. 정식 성과검증은 여전히 찬휘
+    백테스트 엔진 몫이며, 여기 값은 후보 policy 간 방향성 선별용 근사다.
+    """
+    if len(rewards) < 2:
+        return 0.0
+    arr = np.asarray(rewards, dtype=np.float64)
+    std = float(arr.std(ddof=1))
+    if std == 0.0:
+        return 0.0
+    return float(arr.mean() / std * np.sqrt(TRADING_DAYS_PER_YEAR))
+
+
 def evaluate(model, cfg: dict, fold_id: int, split: str = "valid") -> dict:
     """정책을 결정적으로 1 에피소드 굴려 요약 지표를 낸다.
 
     학습 중 조기 확인용이며, 정식 성과 검증은 찬휘 백테스트 엔진(docs/backtest_engine.md)이
-    맡는다 — 여기서는 같은 reward 계산을 재사용해 방향성만 빠르게 본다.
+    맡는다 — 여기서는 같은 reward 계산을 재사용해 방향성만 빠르게 본다. `{split}_sharpe`는
+    배포 policy 선택(select.py)의 기본 지표다.
     """
     env = load_fold_env(cfg, fold_id, split)
     obs, _ = env.reset()
-    total_reward = 0.0
+    rewards: list[float] = []  # 스텝별 net 로그보상 R_t (Sharpe 산출용 시계열)
     total_cost = 0.0
     total_turnover = 0.0
-    n_steps = 0
     terminated = truncated = False
     while not (terminated or truncated):
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, terminated, truncated, info = env.step(action)
-        total_reward += float(reward)
+        rewards.append(float(reward))
         total_cost += float(info["cost"])
         total_turnover += float(info["turnover"])
-        n_steps += 1
+    n_steps = len(rewards)
     return {
-        f"{split}_total_log_return": total_reward,
+        f"{split}_total_log_return": float(sum(rewards)),
+        f"{split}_sharpe": _annualized_sharpe(rewards),
         f"{split}_total_txn_cost": total_cost,
         f"{split}_avg_turnover": total_turnover / max(n_steps, 1),
         f"{split}_n_steps": float(n_steps),
@@ -110,6 +133,7 @@ def train(
     config_path: str = "config/config.yaml",
     fold_id: int | None = None,
     total_timesteps: int | None = None,
+    seed: int | None = None,
 ) -> dict:
     """PPO를 학습하고 MLflow에 기록한다. {run_id, model_path, ...평가지표} 반환."""
     # mlflow-skinny 3.14+에서 순수 파일 트래킹 스토어("mlruns/")가 기본 비활성(유지보수
@@ -132,7 +156,9 @@ def train(
     total_timesteps = (
         total_timesteps if total_timesteps is not None else int(model_cfg.get("total_timesteps", 200_000))
     )
-    seed = int(model_cfg.get("seed", 42))
+    # seed는 fold와 함께 배포 후보를 늘리는 축이다 — 같은 fold를 seed만 바꿔 여러 번 학습해
+    # select.py가 valid 지표로 고를 후보 풀을 만든다(docs/model_training.md §6).
+    seed = seed if seed is not None else int(model_cfg.get("seed", 42))
     policy = model_cfg.get("policy", "MlpPolicy")
 
     env = load_fold_env(cfg, fold_id, "train")
@@ -183,6 +209,7 @@ def train(
             "run_id": run.info.run_id,
             "model_path": str(model_path),
             "fold_id": fold_id,
+            "seed": seed,
             "feature_store_run_id": fs_run_id,  # 배포 시 config.inference.scaler_run_id에 넣을 값
         }
         result.update(metrics)
@@ -194,12 +221,20 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="config/config.yaml")
     parser.add_argument("--fold-id", type=int, default=None)
     parser.add_argument("--total-timesteps", type=int, default=None)
+    parser.add_argument(
+        "--seed", type=int, default=None, help="config model.seed 오버라이드(배포 후보 늘리기용)"
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
-    result = train(args.config, fold_id=args.fold_id, total_timesteps=args.total_timesteps)
+    result = train(
+        args.config,
+        fold_id=args.fold_id,
+        total_timesteps=args.total_timesteps,
+        seed=args.seed,
+    )
     print(result)
     # 배포용 안내: 이 policy를 서빙하려면 config.inference를 아래 값으로 채운다(이슈 #27).
     print(
