@@ -140,8 +140,65 @@ PyPI `torch` 휠이 CUDA 런타임을 포함하므로 별도 CUDA 베이스 이�
 
 ---
 
+## 7. DQN MVP용 이산 환경 어댑터 (3주차, `src/env/discrete_env.py`)
+
+3주차 마일스톤 "DQN MVP E2E 연결"을 위해 `PortfolioEnv`(연속 로짓 계약)를 이산 행동으로
+감싸는 어댑터. DQN은 유한한 행동 집합을 요구하므로, 원본 env는 손대지 않고 `ActionWrapper`로
+정수 action → 로짓 벡터를 변환한다. 5주차 PPO 전환 시 이 어댑터는 그대로 두고
+학습 스크립트가 원본 env(연속 로짓)를 다시 쓴다.
+
+### 7-1. 행동 설계 — 옵션 B "SHV와 교환하거나 유지"
+| action | 의미 |
+|---|---|
+| 0..3 | 자산 i(SPY/EWY/TLT/GLD)에 +Δ (SHV에서 이전) |
+| 4..7 | 자산 i에서 -Δ (SHV로 반환) |
+| 8    | 유지 (현재 비중 그대로) |
+
+총 `2·A_tr + 1 = 9`개 (A_tr = SHV 제외 자산 수). SHV(현금성)를 상대 계정으로 삼으면
+이전량이 명확하고 ∑w=1이 자동 보존된다. 설계 A(자산별 3택 = 3⁵=243)나 프리셋 방식 대비
+Q(s,a) 테이블이 좁아 DQN 학습이 안정적이다.
+
+**경계 처리:** 실제 이전량 = `min(Δ, 여유분)`으로 clip → 음수 비중 방지. SHV=0에서 +Δ,
+자산=0에서 -Δ는 no-op으로 동작하지만 유지·반대방향 action은 항상 유효.
+
+### 7-2. 로짓 변환 — softmax 계약 유지
+원본 env는 내부에서 `_softmax()`로 정규화한다. 계산한 `w_new`(합=1)를
+`log(clip(w_new, EPS, 1))`로 넘기면 softmax가 `w_new`를 EPS 근사오차 내에서 복원한다.
+
+```
+softmax(log(w)) = exp(log(w)) / Σ exp(log(w)) = w / Σw = w   (Σw=1일 때)
+```
+
+EPS(=1e-8)로 잘린 0-비중 자산은 softmax 후 약 1e-8 크기로 남아 원 의도와 사실상 일치
+(테스트 `test_weights_sum_to_1_after_arbitrary_sequence`로 검증).
+
+### 7-3. 학습에서 사용하는 법 (도현 인터페이스)
+```python
+from src.env.portfolio_env import PortfolioEnv
+from src.env.discrete_env import DiscretePortfolioEnv
+from stable_baselines3 import DQN
+
+env = DiscretePortfolioEnv(
+    PortfolioEnv(state_df, returns_df, cfg=cfg),
+    delta=0.1,   # 스텝당 SHV↔자산 이전 폭 (0, 1]
+)
+model = DQN("MlpPolicy", env, ...).learn(total_timesteps=...)
+```
+
+관측 shape·보상 계약은 원본 env를 그대로 통과하므로 `MlpPolicy` 입력 차원은 187 그대로.
+`tests/test_discrete_env.py::test_sb3_dqn_learns_a_few_steps`가 SB3 DQN이 이 어댑터에
+붙어 예외 없이 학습되는지(파이프라인 결선)를 검증한다 — 3주차 완료 기준
+"환경-에이전트 연결 확인"에 해당.
+
+### 7-4. 4주차 이후 유지 방침
+DQN MVP는 파이프라인 결선용이며, 성능 검증은 5주차 PPO(연속 로짓) 전환 후 정식으로 한다.
+어댑터는 5주차 이후에도 대안 실험(이산 vs 연속)이 필요할 수 있어 유지한다.
+
+---
+
 ## 변경 이력
 | 버전 | 날짜 | 내용 |
 |---|---|---|
 | v0.1 | 2026-07-13 | 최초 작성. PPO 학습 스크립트·RunPod Dockerfile·mlflow-skinny 전환 근거 반영. |
 | v0.2 | 2026-07-15 | 이슈 #27: build `run_id` provenance 기록(MLflow `feature_store_run_id` 파라미터·모델 파일명 `ppo_fold<id>_<build_run_id>_<mlflow_run_id>.zip`). 배포 시 `config.inference.scaler_run_id`로 복사. |
+| v0.3 | 2026-07-18 | §7 추가: DQN MVP용 `DiscretePortfolioEnv` 어댑터(옵션 B, action_space=Discrete(9))·로짓 변환 계약·환경-에이전트 연결 스모크 테스트. |
