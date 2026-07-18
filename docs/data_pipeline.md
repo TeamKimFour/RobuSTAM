@@ -303,7 +303,7 @@ Variables) 완료 후 `s3_sync`와 같은 방식으로 policy·meta를 올리면
 | v0.3 | 2026-07-02 | 지표 계산(features.py)·187 조립(assemble.py) 구현. state_spec §3-1 산식 반영. |
 | v0.4 | 2026-07-03 | walk-forward 분할·z-score 정규화·build 오케스트레이터 구현. Feature Store 실데이터 적재 + targets. |
 | v0.5 | 2026-07-09 | 배포 준비 반영: Docker 이미지·S3 업로드(s3_sync)·일일 워크플로(daily.yml). 실제 클라우드 연결 대기. |
-| v0.6 | 2026-07-18 | §8-1 추가: 배포 산출물(policy.zip + meta.sqlite) 반출 절차. RunPod 실학습 중 발견 — build `run_id`가 타임스탬프 기반이라 재현 불가하므로 `meta.sqlite`를 함께 옮기지 않으면 정규화 재현이 실패한다. |
 | v0.6 | 2026-07-13 | precompute latest.json 계약(§8) 추가 — src/api/main.py 추론 엔드포인트 구현과 함께. |
 | v0.7 | 2026-07-13 | precompute 생산자 구현(`src/inference/precompute.py`)·`config.inference` 섹션 반영. build_today_obs(민지 글루)·generate_latest(도현 모델 파트) 접점 계약 확정. |
 | v0.8 | 2026-07-15 | 이슈 #27: `train.py`가 학습 fold의 build `run_id`를 provenance로 기록(MLflow 파라미터·모델 파일명). `feature_store.latest_run_id_for_fold` 추가. 배포 시 `config.inference.scaler_run_id`에 복사. |
+| v0.9 | 2026-07-18 | §8-1 추가: 배포 산출물(policy.zip + meta.sqlite) 반출 절차. RunPod 실학습 중 발견 — build `run_id`가 타임스탬프 기반이라 재현 불가하므로 `meta.sqlite`를 함께 옮기지 않으면 정규화 재현이 실패한다. |
