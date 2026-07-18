@@ -256,9 +256,42 @@ jupyter lab notebooks/eda_raw_prices.ipynb
 - `weights`의 자산 키가 `config.yaml`과 다르거나 합이 1에서 벗어나면 **500**을 반환해 파이프라인 오류를
   조기에 드러낸다. (생산자는 원자적 기록으로 부분쓰기 상태의 파일 노출을 방지한다.)
 
+### 8-1. 배포 산출물 반출 — `scaler_run_id`는 재현되지 않는다 ⚠️
+
+**`config.inference` 값을 채우는 것만으로는 배포가 되지 않는다.** 학습을 돌린 머신(RunPod 파드 등)
+에서 **두 개의 파일을 반드시 함께 반출**해야 한다.
+
+| 파일 | 이유 | 위치 |
+|---|---|---|
+| `ppo_fold<id>_<build_run_id>_<mlflow_run_id>.zip` | `inference.model_path`가 가리키는 policy | `mlruns/models/` (gitignore) |
+| `meta.sqlite` | `inference.scaler_run_id`의 `scaler_stats` — 정규화 재현에 필수 | `data/feature_store/` (gitignore) |
+
+**왜 meta.sqlite를 옮겨야 하나 — run_id가 재현 불가능하기 때문이다.** `build.py`는 run_id를
+이렇게 만든다:
+```python
+run_id = f"{config_hash(cfg)}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+```
+**타임스탬프가 들어가므로 다른 머신에서 `build`를 다시 돌려도 같은 run_id가 나오지 않는다.**
+`scaler_stats` 테이블은 `(run_id, fold_id, feature_name)`이 기본키라, 원본 `meta.sqlite` 없이는
+`_restore_scaler`가 통계를 찾지 못하고 다음으로 죽는다:
+```
+ValueError: scaler_stats가 비어 있습니다: run_id='...', fold_id=...
+```
+
+> 같은 config로 다시 build하면 **통계 값 자체는 동일**하지만(정규화는 fold train 구간에서
+> 결정적으로 fit) run_id 키가 달라서 조회에 실패한다. 즉 문제는 데이터가 아니라 **키**다.
+
+**현재 반출 방법(임시):** 파드의 Jupyter 파일 브라우저에서 위 두 파일을 내려받는다.
+컨테이너 디스크는 파드를 Stop/Terminate하면 삭제되므로 **파드를 끄기 전에** 받아야 한다.
+
+**지향점:** S3(`config.data.s3_bucket`) 업로드로 자동화한다. 찬휘 AWS 세팅(버킷·IAM·GitHub
+Variables) 완료 후 `s3_sync`와 같은 방식으로 policy·meta를 올리면, 학습 머신과 서빙 머신이
+분리돼도 배포가 성립한다.
+
 ### 아직 정해지지 않은 것
 - daily.yml precompute 스텝 활성 시점 — 도현 실제 policy.zip + `inference` 값 확정 후(§작업④).
 - 배치 실패 시 이전 `latest.json` 유지 여부(현재는 원자적 덮어쓰기라 성공 시에만 교체).
+- **배포 산출물 반출 자동화**(§8-1) — 현재 수동 다운로드. S3 경로 확정 필요.
 
 ---
 
@@ -273,3 +306,4 @@ jupyter lab notebooks/eda_raw_prices.ipynb
 | v0.6 | 2026-07-13 | precompute latest.json 계약(§8) 추가 — src/api/main.py 추론 엔드포인트 구현과 함께. |
 | v0.7 | 2026-07-13 | precompute 생산자 구현(`src/inference/precompute.py`)·`config.inference` 섹션 반영. build_today_obs(민지 글루)·generate_latest(도현 모델 파트) 접점 계약 확정. |
 | v0.8 | 2026-07-15 | 이슈 #27: `train.py`가 학습 fold의 build `run_id`를 provenance로 기록(MLflow 파라미터·모델 파일명). `feature_store.latest_run_id_for_fold` 추가. 배포 시 `config.inference.scaler_run_id`에 복사. |
+| v0.9 | 2026-07-18 | §8-1 추가: 배포 산출물(policy.zip + meta.sqlite) 반출 절차. RunPod 실학습 중 발견 — build `run_id`가 타임스탬프 기반이라 재현 불가하므로 `meta.sqlite`를 함께 옮기지 않으면 정규화 재현이 실패한다. |
