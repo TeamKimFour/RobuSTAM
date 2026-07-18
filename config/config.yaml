@@ -84,8 +84,21 @@ model:
 # 배포할 policy와, 그 policy가 학습된 build 통계(정규화 재현용)를 가리킨다.
 # 도현 provenance(train.py가 기록하는 build run_id/fold_id)와 값이 일치해야
 # 추론 시 학습과 동일한 z-score가 룩어헤드 없이 재현된다(docs/data_pipeline.md §8).
+#
+# ⚠️ 아래 값은 **배선 검증(wiring test) 전용**이며 성능이 검증되지 않았다.
+#    RunPod 실학습 12회(fold 3 x seed 2 x timesteps 2종) 중 valid 샤프 최고값이지만
+#    그 값이 -0.13으로 **음수**다 — 과매매로 거래비용이 수익을 잠식한다(이슈 #34).
+#    precompute → API 배선이 도는지 확인하는 용도로만 쓰고, 실제 투자 판단 근거로
+#    삼지 않는다. 성능 개선 후 재선정 필요.
+#
+# ⚠️ 이 값만으로는 동작하지 않는다. 학습 머신에서 두 파일을 함께 반출해야 한다
+#    (docs/data_pipeline.md §8-1, 이슈 #33):
+#      - model_path가 가리키는 policy.zip
+#      - data/feature_store/meta.sqlite  ← scaler_run_id의 통계. build run_id가
+#        타임스탬프 기반이라 재빌드로는 같은 키가 재현되지 않는다.
 inference:
-  model_path: ""                 # 배포 policy.zip 경로 (도현이 확정 후 채움; 비면 모델 로드 불가)
-  scaler_run_id: ""              # 그 policy가 학습된 build run_id (meta.sqlite scaler_stats 조회 키)
-  scaler_fold_id: 0              # 그 policy가 학습된 fold_id
-  model_version: "ppo-fold0-v1"  # latest.json에 기록되는 버전 태그
+  # 선택 근거: python -m src.models.select (valid_sharpe 기준, 12개 run 중 최고)
+  model_path: "mlruns/models/ppo_fold1_b461a86027e2-20260718102003_50db7bc4c4a541bb843c6d58d190bee5.zip"
+  scaler_run_id: "b461a86027e2-20260718102003"  # meta.sqlite scaler_stats 조회 키
+  scaler_fold_id: 1                             # fold는 1부터 (splits.py 1-indexed)
+  model_version: "ppo-fold1-50db7bc4"           # latest.json에 기록되는 버전 태그
