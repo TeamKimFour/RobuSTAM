@@ -34,9 +34,9 @@ jobs:
       - name: Feature Store 빌드
         run: python -m src.data.build
 
-      # precompute(오늘의 추천 비중) — 도현 모델 준비 후 활성화
+      # precompute(오늘의 추천 비중) — config.inference 값(도현 배포 policy) 채운 뒤 활성화
       # - name: 추천 비중 precompute
-      #   run: python -m src.api.precompute
+      #   run: python -m src.inference.precompute
 
       # ── 이하 S3 업로드: AWS role(vars.AWS_ROLE_ARN) 설정 시에만 실행 ──
       - name: AWS 자격증명 (OIDC)
