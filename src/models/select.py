@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from src.config_loader import load_config
@@ -58,6 +59,11 @@ def select_best_run(
     ------
     ValueError — 실험이 없거나, 해당 지표를 가진 FINISHED run이 하나도 없을 때.
     """
+    # mlflow-skinny 3.14+는 파일 트래킹 스토어("mlruns/")를 기본 차단한다(문서 §4-2).
+    # train.py와 동일하게 명시적으로 허용한다 — 별도 프로세스로 실행되므로 train.py의
+    # 설정이 전달되지 않아, 여기서 다시 켜주지 않으면 MlflowException으로 죽는다.
+    os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+
     from mlflow.tracking import MlflowClient
 
     model_cfg = cfg.get("model", {})

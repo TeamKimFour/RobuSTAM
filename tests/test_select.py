@@ -6,6 +6,9 @@ fold 필터·빈 결과 예외·model_path 재구성을 검증한다. mlflow는 
 """
 
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -84,6 +87,37 @@ def test_missing_experiment_raises(tmp_path):
     _log_run(_cfg(tmp_path, experiment="other"), fold_id=1, fs_run_id="b", metrics={"valid_sharpe": 1.0})
     with pytest.raises(ValueError, match="실험을 찾을 수 없습니다"):
         select_best_run(cfg)
+
+
+def test_works_in_fresh_process_without_file_store_env(tmp_path):
+    """MLFLOW_ALLOW_FILE_STORE가 없는 새 프로세스에서도 select가 동작해야 한다.
+
+    select는 train과 **별도 프로세스**로 실행되므로 train.py가 켠 환경변수가 전달되지
+    않는다. 이걸 빠뜨려 실제 RunPod 실행에서 MlflowException으로 죽었다(mlflow-skinny
+    3.14+ 파일 스토어 기본 차단, 문서 §4-2).
+
+    같은 프로세스에서 환경변수만 지우면 이미 만들어진 스토어를 재사용해 버그가 재현되지
+    않는다 — 반드시 새 프로세스로 검증해야 한다.
+    """
+    cfg = _cfg(tmp_path)
+    win = _log_run(cfg, fold_id=1, fs_run_id="buildA", metrics={"valid_sharpe": 1.2})
+
+    env = {k: v for k, v in os.environ.items() if k != "MLFLOW_ALLOW_FILE_STORE"}
+    code = (
+        "from src.models.select import select_best_run\n"
+        f"cfg = {cfg!r}\n"
+        "print(select_best_run(cfg)['mlflow_run_id'])\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(Path(__file__).resolve().parent.parent),  # src를 import 가능한 저장소 루트
+    )
+
+    assert proc.returncode == 0, f"새 프로세스에서 실패:\n{proc.stderr}"
+    assert win in proc.stdout
 
 
 def test_no_run_with_metric_raises(tmp_path):
