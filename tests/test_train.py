@@ -142,9 +142,9 @@ def test_train_end_to_end_with_stable_baselines3(tmp_path):
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.dump(cfg), encoding="utf-8")
 
-    from src.models.train import train
+    from src.models.train import _to_tracking_uri, train
 
-    result = train(str(config_path))
+    result = train(str(config_path), seed=7)  # config의 seed=42를 인자로 오버라이드
 
     assert "run_id" in result
     assert result["fold_id"] == 0
@@ -152,3 +152,10 @@ def test_train_end_to_end_with_stable_baselines3(tmp_path):
     # provenance(이슈 #27): build run_id가 결과·모델 파일명에 반영돼야 한다.
     assert result["feature_store_run_id"] == "build-xyz"
     assert "build-xyz" in Path(result["model_path"]).name
+    # --seed 인자가 config model.seed(42)를 이기고 MLflow에도 그 값이 남아야 한다
+    # (같은 fold를 seed만 바꿔 배포 후보를 늘리는 용도).
+    from mlflow.tracking import MlflowClient
+
+    assert result["seed"] == 7
+    client = MlflowClient(tracking_uri=_to_tracking_uri(str(tmp_path / "mlruns")))
+    assert client.get_run(result["run_id"]).data.params["seed"] == "7"

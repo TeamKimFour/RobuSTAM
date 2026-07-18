@@ -13,8 +13,9 @@ Feature Store의 특정 fold train split을 PortfolioEnv에 태워 Stable-Baseli
 따라오지 않게 하기 위함.
 
 실행:
-    python -m src.models.train                              # config 기본 fold·timesteps
+    python -m src.models.train                              # config 기본 fold·timesteps·seed
     python -m src.models.train --fold-id 1 --total-timesteps 500000
+    python -m src.models.train --fold-id 1 --seed 7         # 같은 fold의 배포 후보 추가
 """
 
 from __future__ import annotations
@@ -132,6 +133,7 @@ def train(
     config_path: str = "config/config.yaml",
     fold_id: int | None = None,
     total_timesteps: int | None = None,
+    seed: int | None = None,
 ) -> dict:
     """PPO를 학습하고 MLflow에 기록한다. {run_id, model_path, ...평가지표} 반환."""
     # mlflow-skinny 3.14+에서 순수 파일 트래킹 스토어("mlruns/")가 기본 비활성(유지보수
@@ -154,7 +156,9 @@ def train(
     total_timesteps = (
         total_timesteps if total_timesteps is not None else int(model_cfg.get("total_timesteps", 200_000))
     )
-    seed = int(model_cfg.get("seed", 42))
+    # seed는 fold와 함께 배포 후보를 늘리는 축이다 — 같은 fold를 seed만 바꿔 여러 번 학습해
+    # select.py가 valid 지표로 고를 후보 풀을 만든다(docs/model_training.md §6).
+    seed = seed if seed is not None else int(model_cfg.get("seed", 42))
     policy = model_cfg.get("policy", "MlpPolicy")
 
     env = load_fold_env(cfg, fold_id, "train")
@@ -205,6 +209,7 @@ def train(
             "run_id": run.info.run_id,
             "model_path": str(model_path),
             "fold_id": fold_id,
+            "seed": seed,
             "feature_store_run_id": fs_run_id,  # 배포 시 config.inference.scaler_run_id에 넣을 값
         }
         result.update(metrics)
@@ -216,12 +221,20 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="config/config.yaml")
     parser.add_argument("--fold-id", type=int, default=None)
     parser.add_argument("--total-timesteps", type=int, default=None)
+    parser.add_argument(
+        "--seed", type=int, default=None, help="config model.seed 오버라이드(배포 후보 늘리기용)"
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
-    result = train(args.config, fold_id=args.fold_id, total_timesteps=args.total_timesteps)
+    result = train(
+        args.config,
+        fold_id=args.fold_id,
+        total_timesteps=args.total_timesteps,
+        seed=args.seed,
+    )
     print(result)
     # 배포용 안내: 이 policy를 서빙하려면 config.inference를 아래 값으로 채운다(이슈 #27).
     print(
