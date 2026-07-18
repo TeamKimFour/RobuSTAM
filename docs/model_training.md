@@ -118,20 +118,55 @@ python -m src.models.train --fold-id 1 --total-timesteps 500000
 `config.model.mlflow_tracking_uri`(기본 `mlruns/`)에 남는다. `mlflow ui --backend-store-uri mlruns`
 로 로컬에서 대시보드 확인 가능(mlflow 풀 패키지 별도 설치 필요 — mlflow-skinny엔 UI 서버 없음).
 
-### RunPod (GPU)
-```bash
-# 1) 이미지 빌드 (로컬 또는 RunPod 빌드 환경)
-docker build -t robustam-train -f docker/Dockerfile.train .
+### RunPod
 
-# 2) GPU 파드에서 실행 — data/feature_store가 비어 있으면 collect→build를 자동으로 먼저 돈다
+RunPod 파드 **자체가 이미 컨테이너**라 대부분의 템플릿에는 Docker 데몬이 없다 — 파드 안에서
+`docker build`는 실패한다. 실제로는 두 경로 중 하나를 쓴다.
+
+**방법 A — 파드에서 소스 직접 실행 (간단, 레지스트리 불필요)**
+```bash
+git clone https://github.com/TeamKimFour/RobuSTAM.git && cd RobuSTAM
+pip install -r requirements.txt
+python -m src.data.collect
+python -m src.data.build
+python -m src.models.train --fold-id 1 --total-timesteps 200000
+```
+
+**방법 B — 커스텀 이미지 (로컬에 Docker가 있을 때)**
+```bash
+# 1) 로컬에서 빌드 후 레지스트리에 push
+docker build -t <user>/robustam-train -f docker/Dockerfile.train .
+docker push <user>/robustam-train
+# 2) RunPod에서 이 이미지로 파드를 생성 (파드 안에서 build하지 않는다)
+
+# 로컬에 GPU가 있다면 직접 실행도 가능
 docker run --gpus all \
   -v $PWD/data:/app/data \
   -v $PWD/mlruns:/app/mlruns \
-  robustam-train --fold-id 0 --total-timesteps 1000000
+  <user>/robustam-train --fold-id 1 --total-timesteps 1000000
 ```
-PyPI `torch` 휠이 CUDA 런타임을 포함하므로 별도 CUDA 베이스 이미지 없이도, RunPod가
-컨테이너에 GPU를 노출해주면(`--gpus all`, RunPod 템플릿에서 기본 지원) 그대로 GPU
-학습이 된다. RunPod 계정 생성·파드 기동·과금은 팀원이 직접 수행한다(자동화 범위 밖).
+
+> **fold_id는 1부터다.** `--fold-id 0`은 `FileNotFoundError: fold=0/split=train/part.parquet`로
+> 실패한다(§4-5). 예전 문서 예시가 `0`으로 적혀 있어 실제로 이 오류를 한 번 겪었다.
+
+**GPU가 필요한가 — 대개 아니다.** 정책망이 `MlpPolicy`(187차원 입력의 작은 MLP)라 SB3 공식
+권장대로 **CPU가 오히려 빠르다**(GPU는 커널 실행·전송 오버헤드가 이득을 넘어선다). 또한
+`requirements.txt`가 `torch==2.13.0`으로 핀돼 있어 PyTorch 템플릿의 사전설치 torch는 어차피
+재설치된다. 비용을 아끼려면 **CPU 파드**를 권한다. GPU 파드를 쓰더라도 PyPI `torch` 휠이 CUDA
+런타임을 포함하므로 별도 CUDA 베이스 이미지는 불필요하다.
+
+RunPod 계정 생성·파드 기동·과금은 팀원이 직접 수행한다(자동화 범위 밖). **작업이 끝나면 파드를
+Terminate**한다 — Stop 상태에서도 디스크 요금이 계속 나간다.
+
+### 배포 후보 여러 개 만들기
+`select.py`(§6)가 고를 후보를 만들려면 fold·seed를 바꿔 여러 번 학습한다.
+```bash
+for f in 1 2 3; do
+  for s in 42 7; do
+    python -m src.models.train --fold-id $f --seed $s --total-timesteps 200000
+  done
+done
+```
 
 ---
 
@@ -232,4 +267,4 @@ DQN MVP는 파이프라인 결선용이며, 성능 검증은 5주차 PPO(연속 
 | v0.1 | 2026-07-13 | 최초 작성. PPO 학습 스크립트·RunPod Dockerfile·mlflow-skinny 전환 근거 반영. |
 | v0.2 | 2026-07-15 | 이슈 #27: build `run_id` provenance 기록(MLflow `feature_store_run_id` 파라미터·모델 파일명 `ppo_fold<id>_<build_run_id>_<mlflow_run_id>.zip`). 배포 시 `config.inference.scaler_run_id`로 복사. |
 | v0.3 | 2026-07-18 | §7 추가: DQN MVP용 `DiscretePortfolioEnv` 어댑터(옵션 B, action_space=Discrete(9))·로짓 변환 계약·환경-에이전트 연결 스모크 테스트. |
-| v0.4 | 2026-07-18 | §6 추가: 배포 policy 선택 로직(`src/models/select.py`) — MLflow에서 `valid_sharpe` 최고 run 선택 → `config.inference` 값 출력. `evaluate`에 `valid_sharpe`(연율화 위험조정수익 proxy) 기록. 미정 항목은 §8로 이동. |
+| v0.4 | 2026-07-18 | §6 추가: 배포 policy 선택 로직(`src/models/select.py`) — MLflow에서 `valid_sharpe` 최고 run 선택 → `config.inference` 값 출력. `evaluate`에 `valid_sharpe`(연율화 위험조정수익 proxy) 기록. `train.py --seed` 인자 추가(배포 후보 확장용). §5 RunPod 실행 절차 정정(`--fold-id 0`→`1`, 파드 내 `docker build` 불가·CPU 권장 명시). 미정 항목은 §8로 이동. |
