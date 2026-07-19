@@ -30,9 +30,9 @@ export default function Landing() {
           RobuSTAM<sup>®</sup>
         </h1>
         <nav className="landing-nav">
-          <Link href="/dashboard">Backtest</Link>
-          <Link href="/dashboard">Inference</Link>
-          <Link href="#">Docs</Link>
+          <Link href="/backtest">Backtest</Link>
+          <Link href="/inference">Inference</Link>
+          <Link href="https://github.com/TeamKimFour/RobuSTAM#readme">Docs</Link>
         </nav>
       </div>
 
@@ -51,14 +51,14 @@ export default function Landing() {
             한계를 투명하게 규명하는 것이 목표다.
           </p>
 
-          <Link href="/dashboard" className="landing-cta">
+          <Link href="/inference" className="landing-cta">
             <div className="landing-cta-top">
               <span>Launch</span>
               <span className="landing-cta-arrow">↗</span>
             </div>
             <div className="landing-cta-bottom">
               <span className="landing-cta-title">Enter</span>
-              <span className="landing-cta-sub">Dashboard</span>
+              <span className="landing-cta-sub">Inference</span>
             </div>
           </Link>
         </div>
