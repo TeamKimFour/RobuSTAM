@@ -1,4 +1,5 @@
 import Link from "next/link";
+import LiveClock from "./components/LiveClock";
 
 export default function Landing() {
   return (
@@ -16,12 +17,13 @@ export default function Landing() {
 
         <div className="landing-top-item inline">
           <Link href="https://github.com/TeamKimFour/RobuSTAM">GitHub</Link>
-          <Link href="#">Notion</Link>
         </div>
 
         <div className="landing-top-item right">
           <span className="label">Based in Seoul</span>
-          <span className="sub">09 15 KST</span>
+          <span className="sub">
+            <LiveClock />
+          </span>
         </div>
       </div>
 
@@ -32,7 +34,7 @@ export default function Landing() {
         <nav className="landing-nav">
           <Link href="/backtest">Backtest</Link>
           <Link href="/inference">Inference</Link>
-          <Link href="https://github.com/TeamKimFour/RobuSTAM#readme">Docs</Link>
+          <Link href="/models">Models</Link>
         </nav>
       </div>
 
