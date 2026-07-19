@@ -114,10 +114,48 @@ def test_prev_weight_injection(tmp_path):
     np.testing.assert_allclose(obs[schema.prev_weight_slice(W)], prev, rtol=0, atol=1e-6)
 
 
-def test_missing_scaler_run_id_raises(tmp_path):
+def test_empty_scaler_run_id_auto_resolves(tmp_path):
+    """scaler_run_id를 비우면 같은 config_hash의 최신 build run을 자동 선택한다(이슈 #33).
+
+    build run_id는 타임스탬프를 포함해 머신 간 재현이 불가능하지만, 같은 config로 재빌드하면
+    통계가 사실상 동일하다. 덕분에 CI·서버가 각자 build해서 쓰면 되고 `meta.sqlite`를 옮길
+    필요가 없다. 명시했을 때와 결과가 같아야 한다.
+    """
+    cfg, run_id = _setup(tmp_path)
+    obs_pinned, _ = build_today_obs(cfg, prev_weights=None)
+
+    cfg["inference"]["scaler_run_id"] = ""  # 비우면 자동 해석
+    obs_auto, _ = build_today_obs(cfg, prev_weights=None)
+
+    np.testing.assert_array_equal(obs_auto, obs_pinned)
+
+
+def test_auto_resolve_ignores_other_config_hash(tmp_path):
+    """자동 선택은 config_hash가 다른 run을 집으면 안 된다.
+
+    그냥 "최신 run"을 쓰면 window·자산구성이 다른 빌드의 통계를 조용히 집어 차원·의미가
+    어긋난다. 더 최신이지만 해시가 다른 미끼 run을 심어 무시하는지 확인한다.
+    """
+    cfg, run_id = _setup(tmp_path)
+    db = cfg["data"]["meta_db"]
+    # 더 나중에 만들어졌지만 config_hash가 다른 run(예: W=20 빌드)을 심는다.
+    fs.write_run(db, "decoy-9999", "2099-01-01T00:00:00", "deadbeefcafe", 20, 137, ASSETS)
+
+    cfg["inference"]["scaler_run_id"] = ""
+    resolved = fs.latest_run_id_for_config(db, fs.config_hash(cfg))
+
+    assert resolved == run_id != "decoy-9999"
+    # 실제 경로도 정상 동작해야 한다(미끼 통계가 없으므로 잘못 집으면 여기서 깨진다).
+    obs, _ = build_today_obs(cfg, prev_weights=None)
+    assert obs.shape == (187,)
+
+
+def test_no_matching_build_raises(tmp_path):
+    """해당 config_hash의 build가 아예 없으면 명확한 에러를 낸다."""
     cfg, _ = _setup(tmp_path)
     cfg["inference"]["scaler_run_id"] = ""
-    with pytest.raises(ValueError, match="scaler_run_id"):
+    cfg["window"] = 20  # config_hash가 달라져 매칭되는 run이 없음
+    with pytest.raises(ValueError, match="build run이 없습니다"):
         build_today_obs(cfg, prev_weights=None)
 
 

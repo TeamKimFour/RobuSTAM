@@ -192,6 +192,35 @@ def write_scaler_stats(
         )
 
 
+def latest_run_id_for_config(db_path: str, config_hash: str) -> str | None:
+    """해당 `config_hash`로 만들어진 build run 중 가장 최근 run_id를 반환한다(없으면 None).
+
+    `config.inference.scaler_run_id`를 비워둔 채로 배포할 때 쓰는 해석기다. build run_id는
+    타임스탬프를 포함해 머신 간 재현이 불가능하지만, **같은 config로 재빌드하면 정규화 통계는
+    사실상 동일**하다(실측: 182개 중 최대 상대오차 7.4e-4 — 조정가 반올림 노이즈 수준).
+    따라서 통계 파일을 옮기는 대신 각자 build해서 자기 run을 쓰면 된다.
+
+    `config_hash`로 좁히는 이유: 그냥 "최신 run"을 쓰면 `window`·자산구성이 다른 빌드의
+    통계를 조용히 집어 차원·의미가 어긋날 수 있다. 해시가 같아야 최소한 State 규격이 같다.
+
+    주의: `config_hash`는 `{assets, window}`만 해싱한다(`fs.config_hash`). `features.params`나
+    `normalize` 설정을 바꾸면 해시는 그대로인데 통계 의미가 달라지므로, 그런 변경 뒤에는
+    `scaler_run_id`를 명시적으로 고정하는 편이 안전하다.
+    """
+    if not Path(db_path).is_file():
+        return None
+    with sqlite3.connect(db_path) as conn:
+        try:
+            row = conn.execute(
+                "SELECT run_id FROM runs WHERE config_hash=? "
+                "ORDER BY created_at DESC, run_id DESC LIMIT 1",
+                (config_hash,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+    return row[0] if row else None
+
+
 def read_scaler_stats(db_path: str, run_id: str, fold_id: int) -> dict[str, tuple[float, float]]:
     """fold의 정규화 통계를 {feature_name: (mean, std)}로 반환한다."""
     with sqlite3.connect(db_path) as conn:

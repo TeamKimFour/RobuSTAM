@@ -277,42 +277,63 @@ build가 통과했다면 `s3_sync`가 **빈 데이터로 팀 공용 S3 스냅샷
 - `weights`의 자산 키가 `config.yaml`과 다르거나 합이 1에서 벗어나면 **500**을 반환해 파이프라인 오류를
   조기에 드러낸다. (생산자는 원자적 기록으로 부분쓰기 상태의 파일 노출을 방지한다.)
 
-### 8-1. 배포 산출물 반출 — `scaler_run_id`는 재현되지 않는다 ⚠️
+### 8-1. 배포 산출물 반출 — policy.zip만 옮기면 된다
 
-**`config.inference` 값을 채우는 것만으로는 배포가 되지 않는다.** 학습을 돌린 머신(RunPod 파드 등)
-에서 **두 개의 파일을 반드시 함께 반출**해야 한다.
+학습 머신(RunPod 파드 등)에서 서빙 환경으로 넘겨야 하는 것은 **policy.zip 하나뿐**이다.
 
-| 파일 | 이유 | 위치 |
+| 파일 | 반출 필요? | 이유 |
 |---|---|---|
-| `ppo_fold<id>_<build_run_id>_<mlflow_run_id>.zip` | `inference.model_path`가 가리키는 policy | `mlruns/models/` (gitignore) |
-| `meta.sqlite` | `inference.scaler_run_id`의 `scaler_stats` — 정규화 재현에 필수 | `data/feature_store/` (gitignore) |
+| `ppo_fold<id>_<build_run_id>_<mlflow_run_id>.zip` | **필요** | 서빙 환경은 모델을 스스로 만들 수 없다 (gitignore) |
+| `meta.sqlite` | **불필요** | 각자 `build`해서 자기 run의 통계를 쓰면 된다 (아래) |
 
-**왜 meta.sqlite를 옮겨야 하나 — run_id가 재현 불가능하기 때문이다.** `build.py`는 run_id를
-이렇게 만든다:
+#### build run_id는 머신 간 재현되지 않는다
 ```python
 run_id = f"{config_hash(cfg)}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
 ```
-**타임스탬프가 들어가므로 다른 머신에서 `build`를 다시 돌려도 같은 run_id가 나오지 않는다.**
-`scaler_stats` 테이블은 `(run_id, fold_id, feature_name)`이 기본키라, 원본 `meta.sqlite` 없이는
-`_restore_scaler`가 통계를 찾지 못하고 다음으로 죽는다:
-```
-ValueError: scaler_stats가 비어 있습니다: run_id='...', fold_id=...
-```
+타임스탬프가 들어가므로 다른 머신에서 `build`를 다시 돌려도 같은 run_id가 나오지 않는다.
+`scaler_stats`는 `(run_id, fold_id, feature_name)`이 기본키라, 학습 머신의 run_id를
+`inference.scaler_run_id`에 그대로 박아두면 서빙 환경에서 조회에 실패한다.
 
-> 같은 config로 다시 build하면 **통계 값 자체는 동일**하지만(정규화는 fold train 구간에서
-> 결정적으로 fit) run_id 키가 달라서 조회에 실패한다. 즉 문제는 데이터가 아니라 **키**다.
+#### 해결: `scaler_run_id`를 비우면 자동 해석
+`_restore_scaler`는 `scaler_run_id`가 비어 있으면 **현재 config의 `config_hash`로 만들어진
+최신 build run**을 자동 선택한다(`feature_store.latest_run_id_for_config`). 따라서 CI·서버가
+각자 `build`를 돌린 뒤 자기 run을 쓰면 되고, 통계 파일을 옮길 필요가 없다.
 
-**현재 반출 방법(임시):** 파드의 Jupyter 파일 브라우저에서 위 두 파일을 내려받는다.
-컨테이너 디스크는 파드를 Stop/Terminate하면 삭제되므로 **파드를 끄기 전에** 받아야 한다.
+**근거 — 재빌드해도 통계가 사실상 동일하다(실측).** 같은 config로 하루 간격 재빌드해 fold1
+통계 182개를 비교한 결과:
 
-**지향점:** S3(`config.data.s3_bucket`) 업로드로 자동화한다. 찬휘 AWS 세팅(버킷·IAM·GitHub
-Variables) 완료 후 `s3_sync`와 같은 방식으로 policy·meta를 올리면, 학습 머신과 서빙 머신이
-분리돼도 배포가 성립한다.
+| 항목 | 결과 |
+|---|---|
+| 키 집합·행수 | 완전 일치 (182개) |
+| 완전 일치 | 37/182 |
+| **최대 상대오차** | **7.4e-4 (0.07%)** |
+
+fold train 구간이 `anchor ~ train_end`로 **거래일 위치 기준** 고정되고(`splits.make_folds`가
+`idx.get_loc`으로 위치 계산) 새 데이터는 뒤에만 붙으므로 train 구간 자체가 변하지 않는다.
+남는 미세 오차는 `auto_adjust=True`(배당 소급 조정)의 **반올림 노이즈**다 — 로그수익률은
+균일 스케일에 불변이지만 조정가가 유한 자릿수로 저장되기 때문. 오차가 큰 항목이
+`feat_TLT_MACD_Hist`(가격 차분이라 스케일 불변 아님)와 `SHV` 계열(값이 1e-4 수준이라 상대오차가
+커 보임)인 것도 이 설명과 일치한다. z-score 기준 0.0007σ 수준이라 정책 입력에 무의미하다.
+
+> **`config_hash`로 좁히는 이유**: 그냥 "최신 run"을 쓰면 `window`·자산구성이 다른 빌드의
+> 통계를 조용히 집어 차원·의미가 어긋난다. 해시가 같아야 최소한 State 규격이 같다.
+>
+> **한계**: `config_hash`는 `{assets, window}`만 해싱한다. `features.params`·`normalize`를
+> 바꾸면 해시는 그대로인데 통계 의미가 달라지므로, 그런 변경 뒤에는 `scaler_run_id`를
+> 명시적으로 고정하는 편이 안전하다. 감사 추적이 필요할 때도 명시 고정을 쓴다.
+
+#### policy.zip 반출 방법
+- **현재(수동)**: RunPod은 `runpodctl send <파일>` → 로컬에서 `runpodctl receive <코드>`.
+  컨테이너 디스크는 파드를 Stop/Terminate하면 삭제되므로 **끄기 전에** 받아야 한다.
+- **지향점**: S3(`config.data.s3_bucket`) 업로드 자동화. 찬휘 AWS 세팅 완료 후 `s3_sync`와
+  같은 방식으로 policy를 올리면 학습 머신과 서빙 머신이 완전히 분리된다(이슈 #33).
 
 ### 아직 정해지지 않은 것
 - daily.yml precompute 스텝 활성 시점 — 도현 실제 policy.zip + `inference` 값 확정 후(§작업④).
 - 배치 실패 시 이전 `latest.json` 유지 여부(현재는 원자적 덮어쓰기라 성공 시에만 교체).
-- **배포 산출물 반출 자동화**(§8-1) — 현재 수동 다운로드. S3 경로 확정 필요.
+- **policy.zip 반출 자동화**(§8-1) — 현재 수동 전송. S3 경로 확정 필요(이슈 #33).
+- `config_hash` 범위 확대 여부 — 현재 `{assets, window}`만 반영해 `features`·`normalize` 변경을
+  탐지하지 못한다.
 
 ---
 
