@@ -74,6 +74,24 @@ curl -k https://localhost/health
 공인 CA가 서명하지 않았기 때문이다. 로컬 개발 환경에서는 정상이며, 실제 배포 시에는
 공인 인증서(Let's Encrypt 등)로 교체해야 한다.
 
+## Docker Compose 실행 (프로덕션 — API + Cloudflare Tunnel)
+
+`docker-compose.prod.yml`은 로컬용 nginx(self-signed HTTPS) 대신 Cloudflare Tunnel이
+공인 도메인의 TLS 종단을 전담하는 구조다. 호스트에 포트를 열지 않고 `cloudflared`가
+아웃바운드로만 Cloudflare 엣지에 연결한다.
+
+```bash
+# 1) .env.prod 준비 (최초 1회, git에 커밋되지 않음)
+cp .env.prod.example .env.prod
+# CLOUDFLARE_TUNNEL_TOKEN 값을 Cloudflare Zero Trust 대시보드에서 발급받아 채운다.
+
+# 2) 빌드 후 실행
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+```
+
+> **TODO:** 실제 도메인이 아직 확정되지 않았다. 도메인 확정 후 Cloudflare 대시보드에서
+> Public Hostname → `fastapi:8000` 라우팅을 설정해야 외부에서 접근 가능하다.
+
 ## S3 업로드 (선택 — 클라우드 공유)
 
 Feature Store를 S3에 올려 팀·서비스가 공유한다. `config.data.s3_bucket`(또는 환경변수 `S3_BUCKET`)이
