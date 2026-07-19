@@ -83,8 +83,9 @@ Feature Store를 S3에 올려 팀·서비스가 공유한다. `config.data.s3_bu
 S3_BUCKET=my-bucket S3_PREFIX=robustam python -m src.data.s3_sync
 ```
 
-> 매일 자동 실행: `.github/workflows/daily.yml`(KST 07:00 cron) → collect→build→(설정 시)S3 업로드.
-> 실제 S3 연결은 AWS role(`vars.AWS_ROLE_ARN`)·버킷(`vars.S3_BUCKET`) 설정 후 활성.
+> 매일 자동 실행: `.github/workflows/daily.yml`(KST 07:00 cron) → collect→build→S3 업로드.
+> **S3 연결 활성 완료**(2026-07-19 실연결 검증) — 버킷 `robustam-teamkimfour`, 인증은 GitHub
+> OIDC(`vars.AWS_ROLE_ARN`)라 액세스 키가 필요 없다. 상세는 `docs/data_pipeline.md` §7.
 
 ## 백테스트 결과 S3 저장
 
