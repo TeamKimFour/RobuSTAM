@@ -81,6 +81,18 @@ def test_feature_causality():
     pd.testing.assert_frame_equal(market.loc[past], market2.loc[past])
 
 
+def test_short_input_raises_clear_error():
+    """데이터 부족 시 pandas-ta None이 흘러가 TypeError로 터지지 않고, 원인이 보이는 에러가 난다.
+
+    (daily.yml 장애: 수집 0행 → `TypeError: NoneType - NoneType`으로 원인에서 멀리 떨어져 실패)
+    """
+    idx = pd.bdate_range("2020-01-01", periods=3)
+    close = pd.Series([100.0, 101.0, 102.0], index=idx, name="SPY")
+    logret = pd.Series([0.0, 0.01, 0.01], index=idx, name="SPY")
+    with pytest.raises(ValueError, match="입력이"):
+        F._asset_feature("MA_Cross_5_20", close, logret, _cfg()["features"]["params"])
+
+
 def test_rsi_high_on_uptrend():
     """단조 상승 가격이면 RSI가 높아야 한다 (sanity)."""
     idx = pd.bdate_range("2015-01-01", periods=200)

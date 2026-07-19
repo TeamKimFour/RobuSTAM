@@ -12,7 +12,7 @@
 |---|---|---|
 | 설정 단일 출처 | `config/config.yaml`, `src/config_loader.py` | ✅ 구현 |
 | State 인덱스맵 | `src/data/schema.py` | ✅ 구현 |
-| 원시 수집 | `src/data/collect.py` | ✅ 구현 |
+| 원시 수집 | `src/data/collect.py` | ✅ 구현 (재시도·품질 게이트 §7-1) |
 | 로그수익률·윈도우 | `src/data/returns.py` | ✅ 구현 |
 | 기술적 지표 6+2 | `src/data/features.py` | ✅ 구현 |
 | 187차원 조립 | `src/data/assemble.py` | ✅ 구현 |
@@ -20,7 +20,7 @@
 | z-score 정규화 | `src/data/normalize.py` | ✅ 구현 |
 | Feature Store 입출력 | `src/data/feature_store.py` | ✅ 구현 (scaler_stats·targets 포함) |
 | 빌드 오케스트레이터 | `src/data/build.py` | ✅ 구현 (실데이터 적재) |
-| Feature Store S3 업로드 | `src/data/s3_sync.py` | ✅ **활성** (2026-07-19 실연결 검증) |
+| Feature Store S3 업로드 | `src/data/s3_sync.py` | ✅ **활성** (2026-07-19 실연결 검증, §7-2) |
 | 파이프라인 컨테이너 | `docker/Dockerfile.pipeline` | ✅ 구현 |
 | 매일 자동 빌드 (CI) | `.github/workflows/daily.yml` | ✅ 구현 |
 
@@ -70,7 +70,7 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
   (s3:// 직접쓰기 불가 회피). 버킷 미설정 시 skip. 실행 `python -m src.data.s3_sync`.
 - **`docker/Dockerfile.pipeline`** — collect·build 컨테이너 이미지(Python 3.12·핀 의존성).
 - **`.github/workflows/daily.yml`** — 매일 KST 07:00 cron: collect→build→**S3 업로드(활성)**.
-  precompute(오늘의 비중, §8)는 모델 준비 후 추가. S3 연결은 2026-07-19 실연결 검증 완료(§7).
+  precompute(오늘의 비중, §8)는 모델 준비 후 추가. S3 연결은 2026-07-19 실연결 검증 완료(§7-2).
 - **`feature_store.py`** — 가공된 187차원 피처의 저장·조회. Parquet 파티션 입출력
   (`write_features / load_features / partition_path`) + SQLite 메타
   (`init_meta_db / write_run / write_feature_columns / write_fold / read_*`). I/O 골격 구현 완료,
@@ -186,7 +186,28 @@ jupyter lab notebooks/eda_raw_prices.ipynb
 - **`validate_prices(df, assets)`** — 자동 품질 게이트: 자산 컬럼·순서, 인덱스 정렬·중복, NaN,
   가격>0, 극단 일간변동, 최소 행수. 위반 목록 반환. `tests/test_validate.py`로 박제.
 
-### S3 실연결 검증 기록 (2026-07-19)
+### 7-1. 수집 신뢰성 — 재시도 · 품질 게이트 · 캐시 보호
+
+**배경(2026-07-17·18 daily.yml 장애):** Yahoo가 CI 러너 IP를 간헐적으로 레이트리밋해
+`yfinance`가 **0행**을 반환했다(`수집 완료: 0일 × 5자산`, 기간 `NaT ~ NaT`). 당시 `collect`는
+이를 **"성공"으로 처리**했고, 빈 데이터가 흘러가 지표 계산에서 원인과 동떨어진
+`TypeError: NoneType - NoneType`(pandas-ta `sma`가 None 반환)으로 터졌다. 더 위험하게는,
+build가 통과했다면 `s3_sync`가 **빈 데이터로 팀 공용 S3 스냅샷을 덮어썼을** 것이다.
+
+**대응 — `collect.fetch_prices`가 두 겹으로 막는다:**
+
+| 층 | 동작 |
+|---|---|
+| ① 재시도 | `yf.download`를 지수 백오프로 재시도(기본 3회, 2→4→8초). 빈 응답·예외 모두 재시도 대상 — transient 레이트리밋을 흡수 |
+| ② 품질 게이트 | `validate_prices(prices, assets, min_rows)` 호출. 위반 시 **즉시 `ValueError`** (조용한 성공 금지) |
+| ③ 캐시 보호 | **게이트를 통과했을 때만** Parquet 기록 → 나쁜 데이터가 **좋은 캐시를 덮어쓰지 못한다** |
+
+- 기준 행수는 config `data.min_rows`(기본 1000). 전체 기간 기대치는 약 4,087행.
+- 2차 방어선으로 `features._asset_feature`가 pandas-ta의 `None` 반환을 감지해
+  **자산·지표·입력 행수를 담은 `ValueError`** 로 바꾼다(원인 즉시 파악).
+- `tests/test_collect.py`가 재시도 회복·빈 응답 실패·행수 미달·**캐시 미덮어씀**을 박제한다.
+
+### 7-2. S3 실연결 검증 기록 (2026-07-19)
 
 `daily.yml`을 `dev`에서 수동 트리거해 **collect → build → OIDC 인증 → S3 업로드 전 스텝 통과**를
 확인했다. 이전까지는 빌드 단계에서 끊겨 AWS 스텝에 도달한 적이 없어 미검증 상태였다.
@@ -212,8 +233,9 @@ fold별 train이 3.6 → 4.5 → 5.2MB로 증가 — expanding walk-forward가 �
 브랜치(`dev`)** 에서 돌며, 해당 브랜치로 AssumeRole이 정상 동작함을 확인했다.
 
 > **주의**: 이 검증은 "연결이 된다"를 확인한 것이고, **매일 안정적으로 돈다는 보장은 아니다.**
-> 7/17·7/18은 CI 레이트리밋으로 수집이 0행이 되어 연속 실패했다(PR #37에서 수집 재시도·품질 게이트로 대응). 수집 신뢰성 보강이
+> 7/17·7/18은 CI 레이트리밋으로 수집이 0행이 되어 연속 실패했다(§7-1의 재시도·품질 게이트로 대응). 수집 신뢰성 보강이
 > 함께 있어야 daily가 실제로 유지된다.
+
 
 ### 실데이터 관측 요약 (2009-10-01 ~ 2025-12-30, 4087일)
 - **무결성**: 결측 0, 0이하 가격 0, 극단 이동(|logret|>0.25) 0, 분할 미조정 의심 0 → **모든 검증 통과**.
@@ -325,10 +347,33 @@ fold train 구간이 `anchor ~ train_end`로 **거래일 위치 기준** 고정�
 
 > **`config_hash`로 좁히는 이유**: 그냥 "최신 run"을 쓰면 `window`·자산구성이 다른 빌드의
 > 통계를 조용히 집어 차원·의미가 어긋난다. 해시가 같아야 최소한 State 규격이 같다.
->
-> **한계**: `config_hash`는 `{assets, window}`만 해싱한다. `features.params`·`normalize`를
-> 바꾸면 해시는 그대로인데 통계 의미가 달라지므로, 그런 변경 뒤에는 `scaler_run_id`를
-> 명시적으로 고정하는 편이 안전하다. 감사 추적이 필요할 때도 명시 고정을 쓴다.
+
+##### `config_hash` 범위 — 자동 해석의 유일한 안전장치
+
+자동 해석이 도입되면서 `config_hash`는 "이 build를 이 정책에 써도 되는가"를 판정하는 **유일한
+안전장치**가 됐다. 그래서 **통계 값을 바꾸는 설정을 모두** 해싱한다:
+
+| 포함 | 왜 |
+|---|---|
+| `assets`·`window` | State 규격(차원·자산 순서) |
+| `features` | 지표 파라미터(RSI 길이·MACD·bbands)가 바뀌면 지표 값이 달라짐 |
+| `normalize` | scope·eps가 바뀌면 μ/σ 정의가 달라짐 |
+| `split` | anchor·test_blocks·embargo가 바뀌면 **fold train 구간**이 달라져 통계가 달라짐 |
+
+| 제외 | 왜 |
+|---|---|
+| `data.start`/`end` | fold 경계는 anchor·test_blocks가 정하고 신규 데이터는 뒤에만 붙으므로 train 구간·통계 불변. 포함하면 기간 연장마다 불필요한 재빌드를 부른다 |
+| `transaction_cost` | 환경·보상의 값이지 데이터 산출물과 무관 |
+| `inference`·`model` | 소비 측 설정이라 build 산출물에 영향 없음 |
+
+따라서 지표 파라미터나 fold 경계를 바꾼 build는 **해시가 달라져 자동 선택에서 자연히 걸러지고**,
+`build run이 없습니다`로 **조용히가 아니라 크게 실패**한다. 엄밀한 감사 추적이 필요하면 여전히
+`scaler_run_id`를 명시해 고정한다.
+
+> **호환성**: 해시 범위를 넓히면 **이전 run_id는 더 이상 자동 매칭되지 않는다**. 명시 고정한
+> `scaler_run_id`는 그대로 동작하고, 자동 해석은 **재빌드 후** 새 run을 집는다. `daily.yml`이
+> 매일 build하므로 CI는 다음 실행에서 자연히 회복되고, 로컬은 `python -m src.data.build` 한 번이면 된다.
+> (통계 값 자체는 재빌드해도 동일하므로 — 위 실측 7.4e-4 — 정책 호환성에는 영향이 없다.)
 
 #### policy.zip 반출 방법
 - **현재(수동)**: RunPod은 `runpodctl send <파일>` → 로컬에서 `runpodctl receive <코드>`.
@@ -340,8 +385,6 @@ fold train 구간이 `anchor ~ train_end`로 **거래일 위치 기준** 고정�
 - daily.yml precompute 스텝 활성 시점 — 도현 실제 policy.zip + `inference` 값 확정 후(§작업④).
 - 배치 실패 시 이전 `latest.json` 유지 여부(현재는 원자적 덮어쓰기라 성공 시에만 교체).
 - **policy.zip 반출 자동화**(§8-1) — 현재 수동 전송. S3 경로 확정 필요(이슈 #33).
-- `config_hash` 범위 확대 여부 — 현재 `{assets, window}`만 반영해 `features`·`normalize` 변경을
-  탐지하지 못한다.
 
 ---
 
@@ -358,3 +401,5 @@ fold train 구간이 `anchor ~ train_end`로 **거래일 위치 기준** 고정�
 | v0.8 | 2026-07-15 | 이슈 #27: `train.py`가 학습 fold의 build `run_id`를 provenance로 기록(MLflow 파라미터·모델 파일명). `feature_store.latest_run_id_for_fold` 추가. 배포 시 `config.inference.scaler_run_id`에 복사. |
 | v0.9 | 2026-07-18 | §8-1 추가: 배포 산출물(policy.zip + meta.sqlite) 반출 절차. RunPod 실학습 중 발견 — build `run_id`가 타임스탬프 기반이라 재현 불가하므로 `meta.sqlite`를 함께 옮기지 않으면 정규화 재현이 실패한다. |
 | v0.10 | 2026-07-19 | §8-1 개정: `meta.sqlite` 반출 불필요로 정정. `scaler_run_id`를 비우면 같은 `config_hash`의 최신 build run을 자동 선택하도록 `_restore_scaler` 개선(`feature_store.latest_run_id_for_config`). 재빌드 통계 동일성 실측(최대 상대오차 7.4e-4) 근거 첨부. 민지 제안(이슈 #33). |
+| v0.11 | 2026-07-19 | `config_hash` 범위를 `features`·`normalize`·`split`까지 확대(PR #36 후속). 자동 run 해석의 유일한 안전장치이므로 통계 값을 바꾸는 설정을 모두 포함해 비호환 build를 조용히 선택하지 못하게 한다. `data.start/end`·`transaction_cost`는 통계 불변이라 의도적으로 제외. 기존 run_id는 재빌드 후 자동 회복. |
+| v0.12 | 2026-07-19 | §7-2 추가: S3 실연결 검증 기록(daily.yml 수동 트리거로 OIDC 인증·업로드 20개 파일 확인). §1 표·§3·README의 "AWS 세팅 후 활성" 표기를 활성 완료로 정정. (§7-1 수집 신뢰성은 PR #37에서 추가됐으나 머지 중 이력 항목이 누락돼 여기 함께 기록한다.) |

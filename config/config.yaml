@@ -17,6 +17,8 @@ data:
   start: "2009-10-01"    # 2010 목표구간의 지표 warm-up을 위해 약 60거래일 앞당겨 다운로드
   end: "2025-12-31"
   warmup_buffer_days: 60
+  min_rows: 1000         # 수집 품질 게이트 — 이보다 적으면 수집 사고로 보고 실패시킨다
+                         # (전체 기간 기대 약 4,087행. CI 레이트리밋 시 0행이 오는 사고 방지)
   raw_dir: "data/raw"
   feature_store_dir: "data/feature_store"
   meta_db: "data/feature_store/meta.sqlite"
