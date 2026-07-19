@@ -112,6 +112,27 @@ cp .env.example .env
 `.env`는 `.gitignore` 처리되어 있어 커밋되지 않는다. 배포 환경(EC2/ECS 등)에서는 `.env` 없이
 IAM Role을 쓰는 게 더 안전하다 — 그 경우 `.env` 값은 무시되고 Role 자격증명이 자동 적용된다.
 
+## 프론트엔드 (Next.js 대시보드)
+
+라우트 구조: [docs/frontend.md](docs/frontend.md)
+
+```bash
+cd frontend
+npm install
+cp .env.example .env.local     # NEXT_PUBLIC_API_BASE_URL 확인 (기본 http://localhost:8000)
+npm run dev                    # http://localhost:3000
+```
+
+- `/` — 랜딩 (Backtest / Inference / Docs)
+- `/inference` — FastAPI `/inference/latest` 실시간 조회 (배치 미준비 시 503 안내 표시)
+- `/backtest` — 성과곡선·Drawdown·벤치마크 비교 (백엔드 API 미연결 상태에서는 시연용 합성 데이터)
+
+FastAPI를 함께 띄우려면:
+
+```bash
+uvicorn src.api.main:app --reload
+```
+
 ## 테스트
 
 ```bash
