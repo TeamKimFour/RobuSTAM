@@ -317,10 +317,33 @@ fold train 구간이 `anchor ~ train_end`로 **거래일 위치 기준** 고정�
 
 > **`config_hash`로 좁히는 이유**: 그냥 "최신 run"을 쓰면 `window`·자산구성이 다른 빌드의
 > 통계를 조용히 집어 차원·의미가 어긋난다. 해시가 같아야 최소한 State 규격이 같다.
->
-> **한계**: `config_hash`는 `{assets, window}`만 해싱한다. `features.params`·`normalize`를
-> 바꾸면 해시는 그대로인데 통계 의미가 달라지므로, 그런 변경 뒤에는 `scaler_run_id`를
-> 명시적으로 고정하는 편이 안전하다. 감사 추적이 필요할 때도 명시 고정을 쓴다.
+
+##### `config_hash` 범위 — 자동 해석의 유일한 안전장치
+
+자동 해석이 도입되면서 `config_hash`는 "이 build를 이 정책에 써도 되는가"를 판정하는 **유일한
+안전장치**가 됐다. 그래서 **통계 값을 바꾸는 설정을 모두** 해싱한다:
+
+| 포함 | 왜 |
+|---|---|
+| `assets`·`window` | State 규격(차원·자산 순서) |
+| `features` | 지표 파라미터(RSI 길이·MACD·bbands)가 바뀌면 지표 값이 달라짐 |
+| `normalize` | scope·eps가 바뀌면 μ/σ 정의가 달라짐 |
+| `split` | anchor·test_blocks·embargo가 바뀌면 **fold train 구간**이 달라져 통계가 달라짐 |
+
+| 제외 | 왜 |
+|---|---|
+| `data.start`/`end` | fold 경계는 anchor·test_blocks가 정하고 신규 데이터는 뒤에만 붙으므로 train 구간·통계 불변. 포함하면 기간 연장마다 불필요한 재빌드를 부른다 |
+| `transaction_cost` | 환경·보상의 값이지 데이터 산출물과 무관 |
+| `inference`·`model` | 소비 측 설정이라 build 산출물에 영향 없음 |
+
+따라서 지표 파라미터나 fold 경계를 바꾼 build는 **해시가 달라져 자동 선택에서 자연히 걸러지고**,
+`build run이 없습니다`로 **조용히가 아니라 크게 실패**한다. 엄밀한 감사 추적이 필요하면 여전히
+`scaler_run_id`를 명시해 고정한다.
+
+> **호환성**: 해시 범위를 넓히면 **이전 run_id는 더 이상 자동 매칭되지 않는다**. 명시 고정한
+> `scaler_run_id`는 그대로 동작하고, 자동 해석은 **재빌드 후** 새 run을 집는다. `daily.yml`이
+> 매일 build하므로 CI는 다음 실행에서 자연히 회복되고, 로컬은 `python -m src.data.build` 한 번이면 된다.
+> (통계 값 자체는 재빌드해도 동일하므로 — 위 실측 7.4e-4 — 정책 호환성에는 영향이 없다.)
 
 #### policy.zip 반출 방법
 - **현재(수동)**: RunPod은 `runpodctl send <파일>` → 로컬에서 `runpodctl receive <코드>`.
@@ -332,8 +355,6 @@ fold train 구간이 `anchor ~ train_end`로 **거래일 위치 기준** 고정�
 - daily.yml precompute 스텝 활성 시점 — 도현 실제 policy.zip + `inference` 값 확정 후(§작업④).
 - 배치 실패 시 이전 `latest.json` 유지 여부(현재는 원자적 덮어쓰기라 성공 시에만 교체).
 - **policy.zip 반출 자동화**(§8-1) — 현재 수동 전송. S3 경로 확정 필요(이슈 #33).
-- `config_hash` 범위 확대 여부 — 현재 `{assets, window}`만 반영해 `features`·`normalize` 변경을
-  탐지하지 못한다.
 
 ---
 
@@ -349,4 +370,5 @@ fold train 구간이 `anchor ~ train_end`로 **거래일 위치 기준** 고정�
 | v0.7 | 2026-07-13 | precompute 생산자 구현(`src/inference/precompute.py`)·`config.inference` 섹션 반영. build_today_obs(민지 글루)·generate_latest(도현 모델 파트) 접점 계약 확정. |
 | v0.8 | 2026-07-15 | 이슈 #27: `train.py`가 학습 fold의 build `run_id`를 provenance로 기록(MLflow 파라미터·모델 파일명). `feature_store.latest_run_id_for_fold` 추가. 배포 시 `config.inference.scaler_run_id`에 복사. |
 | v0.9 | 2026-07-18 | §8-1 추가: 배포 산출물(policy.zip + meta.sqlite) 반출 절차. RunPod 실학습 중 발견 — build `run_id`가 타임스탬프 기반이라 재현 불가하므로 `meta.sqlite`를 함께 옮기지 않으면 정규화 재현이 실패한다. |
-| v0.10 | 2026-07-19 | §7-1 추가: 수집 신뢰성(재시도·품질 게이트·캐시 보호). daily.yml 7/17·18 연속 실패 대응 — CI 레이트리밋으로 온 0행이 "성공"으로 통과해 빈 데이터가 파이프라인에 유입되던 결함 수정. `config.data.min_rows` 추가. |
+| v0.10 | 2026-07-19 | §8-1 개정: `meta.sqlite` 반출 불필요로 정정. `scaler_run_id`를 비우면 같은 `config_hash`의 최신 build run을 자동 선택하도록 `_restore_scaler` 개선(`feature_store.latest_run_id_for_config`). 재빌드 통계 동일성 실측(최대 상대오차 7.4e-4) 근거 첨부. 민지 제안(이슈 #33). |
+| v0.11 | 2026-07-19 | `config_hash` 범위를 `features`·`normalize`·`split`까지 확대(PR #36 후속). 자동 run 해석의 유일한 안전장치이므로 통계 값을 바꾸는 설정을 모두 포함해 비호환 build를 조용히 선택하지 못하게 한다. `data.start/end`·`transaction_cost`는 통계 불변이라 의도적으로 제외. 기존 run_id는 재빌드 후 자동 회복. |
