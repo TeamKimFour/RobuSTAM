@@ -203,9 +203,10 @@ def latest_run_id_for_config(db_path: str, config_hash: str) -> str | None:
     `config_hash`로 좁히는 이유: 그냥 "최신 run"을 쓰면 `window`·자산구성이 다른 빌드의
     통계를 조용히 집어 차원·의미가 어긋날 수 있다. 해시가 같아야 최소한 State 규격이 같다.
 
-    주의: `config_hash`는 `{assets, window}`만 해싱한다(`fs.config_hash`). `features.params`나
-    `normalize` 설정을 바꾸면 해시는 그대로인데 통계 의미가 달라지므로, 그런 변경 뒤에는
-    `scaler_run_id`를 명시적으로 고정하는 편이 안전하다.
+    `config_hash`는 `assets·window·features·normalize·split`을 해싱한다 — 즉 **통계 값을
+    바꾸는 설정이 모두 포함**되므로, 지표 파라미터나 fold 경계를 바꾼 build는 해시가 달라져
+    자동 선택에서 자연히 걸러진다(그 경우 "build run이 없습니다"로 크게 실패한다).
+    엄밀한 감사 추적이 필요하면 여전히 `scaler_run_id`를 명시해 고정하면 된다.
     """
     if not Path(db_path).is_file():
         return None
@@ -253,11 +254,37 @@ def load_targets(out_dir: str, fold_id: int, split: str) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
+# 해시 대상 — **산출되는 State·정규화 통계를 바꾸는** config 섹션만 포함한다.
+# 여기 빠진 항목이 바뀌면 해시가 그대로라, 자동 run 해석이 비호환 build를 조용히 고른다.
+_HASH_KEYS = ("assets", "window", "features", "normalize", "split")
+
+
 def config_hash(cfg: dict) -> str:
-    """config의 핵심값 해시 — 차원·자산순서 변경을 탐지(저장 데이터와 코드 정합성)."""
+    """build 산출물의 **호환성 지문**. 같은 해시 = 같은 규격·같은 통계 정의.
+
+    쓰임새가 두 가지다.
+      ① `build.py`의 `run_id` 접두어 — 어떤 설정으로 만든 데이터인지 감사.
+      ② `latest_run_id_for_config`의 **자동 run 해석 필터** — `inference.scaler_run_id`를
+         비웠을 때 "이 build를 써도 되는가"를 판정하는 **유일한 안전장치**(이슈 #33·PR #36).
+
+    ②가 생기면서 해시 범위가 곧 안전성이 됐다. 그래서 통계 값을 바꾸는 설정을 모두 넣는다.
+      - `features` — 지표 파라미터(RSI 길이·MACD·bbands 등)가 바뀌면 지표 값 자체가 달라진다.
+      - `normalize` — scope·eps가 바뀌면 μ/σ의 정의가 달라진다.
+      - `split` — anchor·test_blocks·embargo가 바뀌면 **fold train 구간**이 달라져 통계가 달라진다.
+
+    반대로 아래는 **일부러 제외**한다(통계를 바꾸지 않는데 해시만 흔들려 불필요한 재빌드를 부른다).
+      - `data.start`/`end` — fold 경계는 anchor·test_blocks로 정해지고 신규 데이터는 뒤에만
+        붙으므로, 기간을 늘려도 각 fold의 train 구간·통계는 그대로다.
+      - `transaction_cost` — 환경·보상의 값이지 데이터 산출물과 무관하다.
+      - `inference`·`model` — 소비 측 설정이라 build 산출물에 영향이 없다.
+
+    호환성 메모: 해시 범위를 넓히면 **이전 run_id는 더 이상 매칭되지 않는다**. 명시적으로
+    고정한 `scaler_run_id`는 그대로 동작하고, 자동 해석은 재빌드 후 새 run을 집는다
+    (못 찾으면 "build run이 없습니다"로 조용히가 아니라 크게 실패한다).
+    """
     import hashlib
 
     key = json.dumps(
-        {"assets": cfg.get("assets"), "window": cfg.get("window")}, sort_keys=True
+        {k: cfg.get(k) for k in _HASH_KEYS}, sort_keys=True, default=str
     )
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
