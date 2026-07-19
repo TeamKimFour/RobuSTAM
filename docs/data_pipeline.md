@@ -20,7 +20,7 @@
 | z-score 정규화 | `src/data/normalize.py` | ✅ 구현 |
 | Feature Store 입출력 | `src/data/feature_store.py` | ✅ 구현 (scaler_stats·targets 포함) |
 | 빌드 오케스트레이터 | `src/data/build.py` | ✅ 구현 (실데이터 적재) |
-| Feature Store S3 업로드 | `src/data/s3_sync.py` | ✅ 구현 (⏳ AWS role·버킷 세팅 후 활성) |
+| Feature Store S3 업로드 | `src/data/s3_sync.py` | ✅ **활성** (2026-07-19 실연결 검증) |
 | 파이프라인 컨테이너 | `docker/Dockerfile.pipeline` | ✅ 구현 |
 | 매일 자동 빌드 (CI) | `.github/workflows/daily.yml` | ✅ 구현 |
 
@@ -69,8 +69,8 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
 - **`s3_sync.py`** — 로컬 data(raw·feature_store)를 S3에 업로드(boto3). `meta.sqlite`도 파일로 업로드
   (s3:// 직접쓰기 불가 회피). 버킷 미설정 시 skip. 실행 `python -m src.data.s3_sync`.
 - **`docker/Dockerfile.pipeline`** — collect·build 컨테이너 이미지(Python 3.12·핀 의존성).
-- **`.github/workflows/daily.yml`** — 매일 KST 07:00 cron: collect→build→(AWS role 설정 시)S3 업로드.
-  precompute(오늘의 비중, §8)는 모델 준비 후 추가. 실제 S3 연결은 찬휘 AWS 세팅(OIDC role·버킷) 후 활성.
+- **`.github/workflows/daily.yml`** — 매일 KST 07:00 cron: collect→build→**S3 업로드(활성)**.
+  precompute(오늘의 비중, §8)는 모델 준비 후 추가. S3 연결은 2026-07-19 실연결 검증 완료(§7).
 - **`feature_store.py`** — 가공된 187차원 피처의 저장·조회. Parquet 파티션 입출력
   (`write_features / load_features / partition_path`) + SQLite 메타
   (`init_meta_db / write_run / write_feature_columns / write_fold / read_*`). I/O 골격 구현 완료,
@@ -185,6 +185,35 @@ jupyter lab notebooks/eda_raw_prices.ipynb
   Plotly 차트(가격 추이·수익률 분포·상관 히트맵·롤링 변동성)와 함께 시각적으로 탐색.
 - **`validate_prices(df, assets)`** — 자동 품질 게이트: 자산 컬럼·순서, 인덱스 정렬·중복, NaN,
   가격>0, 극단 일간변동, 최소 행수. 위반 목록 반환. `tests/test_validate.py`로 박제.
+
+### S3 실연결 검증 기록 (2026-07-19)
+
+`daily.yml`을 `dev`에서 수동 트리거해 **collect → build → OIDC 인증 → S3 업로드 전 스텝 통과**를
+확인했다. 이전까지는 빌드 단계에서 끊겨 AWS 스텝에 도달한 적이 없어 미검증 상태였다.
+
+| 스텝 | 결과 |
+|---|---|
+| 원시 수집 | 4087일 × 5자산 (2009-10-01 ~ 2025-12-30) |
+| Feature Store 빌드 | `state_all (4027, 187)`, folds 3 |
+| AWS 자격증명(OIDC) | ✅ `vars.AWS_ROLE_ARN`으로 AssumeRole 성공 |
+| S3 업로드 | ✅ 총 20개 파일 |
+
+업로드 결과(버킷 직접 조회로 실물 확인):
+```
+s3://robustam-teamkimfour/robustam/raw/prices_raw.parquet            160KB
+s3://robustam-teamkimfour/robustam/feature_store/fold={1,2,3}/split={train,valid,test}/
+    part.parquet + targets.parquet                                    18개
+s3://robustam-teamkimfour/robustam/feature_store/meta.sqlite         131KB
+```
+fold별 train이 3.6 → 4.5 → 5.2MB로 증가 — expanding walk-forward가 의도대로 누적된 것을 확인.
+
+**인증 방식**: GitHub OIDC(액세스 키 없음). 저장소 Variables `AWS_ROLE_ARN`·`S3_BUCKET`·
+`S3_PREFIX`로 스텝이 조건부 활성된다(`if: vars.AWS_ROLE_ARN != ''`). 스케줄 실행은 **기본
+브랜치(`dev`)** 에서 돌며, 해당 브랜치로 AssumeRole이 정상 동작함을 확인했다.
+
+> **주의**: 이 검증은 "연결이 된다"를 확인한 것이고, **매일 안정적으로 돈다는 보장은 아니다.**
+> 7/17·7/18은 CI 레이트리밋으로 수집이 0행이 되어 연속 실패했다(PR #37에서 수집 재시도·품질 게이트로 대응). 수집 신뢰성 보강이
+> 함께 있어야 daily가 실제로 유지된다.
 
 ### 실데이터 관측 요약 (2009-10-01 ~ 2025-12-30, 4087일)
 - **무결성**: 결측 0, 0이하 가격 0, 극단 이동(|logret|>0.25) 0, 분할 미조정 의심 0 → **모든 검증 통과**.
