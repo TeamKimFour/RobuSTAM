@@ -23,24 +23,38 @@ def _asset_feature(name: str, close: pd.Series, logret: pd.Series, p: dict) -> p
     """자산 지표 1종 계산. name은 schema.ASSET_FEATURES 값."""
     import pandas_ta as ta
 
+    def _need(obj, what: str):
+        """pandas-ta는 입력이 부족하면 None을 반환한다 — 조용히 흘려보내지 않고 원인을 밝힌다.
+
+        (수집이 빈 데이터를 넘겼을 때 `TypeError: NoneType - NoneType`처럼 원인에서
+        한참 떨어진 곳에서 터지던 문제. 근본 방어는 collect의 품질 게이트다.)
+        """
+        if obj is None:
+            raise ValueError(
+                f"지표 '{name}'의 {what} 계산 실패 — 자산 {close.name!r}의 입력이 "
+                f"{len(close)}행으로 부족합니다. 수집 결과가 비었거나 잘렸는지 확인하세요"
+                " (src/data/collect.py 품질 게이트)."
+            )
+        return obj
+
     if name == "MA_Cross_5_20":
-        sma_fast = ta.sma(close, length=p["sma_fast"])
-        sma_slow = ta.sma(close, length=p["sma_slow"])
+        sma_fast = _need(ta.sma(close, length=p["sma_fast"]), f"sma{p['sma_fast']}")
+        sma_slow = _need(ta.sma(close, length=p["sma_slow"]), f"sma{p['sma_slow']}")
         return (sma_fast - sma_slow) / sma_slow
     if name == "RSI_14":
-        return ta.rsi(close, length=p["rsi_length"])
+        return _need(ta.rsi(close, length=p["rsi_length"]), "rsi")
     if name == "MACD_Hist":
         fast, slow, signal = p["macd"]
-        macd = ta.macd(close, fast=fast, slow=slow, signal=signal)
+        macd = _need(ta.macd(close, fast=fast, slow=slow, signal=signal), "macd")
         return _col_by_prefix(macd, "MACDh_")
     if name == "Rolling_Vol_20":
         return logret.rolling(p["vol_window"]).std()  # annualize_vol=false → 연율화 안 함
     if name == "Bollinger_Band_Width":
         length, std = p["bbands"]
-        bb = ta.bbands(close, length=length, std=std)
+        bb = _need(ta.bbands(close, length=length, std=std), "bbands")
         return _col_by_prefix(bb, "BBB_")
     if name == "ROC_10":
-        return ta.roc(close, length=p["roc_length"])
+        return _need(ta.roc(close, length=p["roc_length"]), "roc")
     raise ValueError(f"알 수 없는 자산 지표: {name}")
 
 

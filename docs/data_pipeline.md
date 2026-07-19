@@ -12,7 +12,7 @@
 |---|---|---|
 | 설정 단일 출처 | `config/config.yaml`, `src/config_loader.py` | ✅ 구현 |
 | State 인덱스맵 | `src/data/schema.py` | ✅ 구현 |
-| 원시 수집 | `src/data/collect.py` | ✅ 구현 |
+| 원시 수집 | `src/data/collect.py` | ✅ 구현 (재시도·품질 게이트 §7-1) |
 | 로그수익률·윈도우 | `src/data/returns.py` | ✅ 구현 |
 | 기술적 지표 6+2 | `src/data/features.py` | ✅ 구현 |
 | 187차원 조립 | `src/data/assemble.py` | ✅ 구현 |
@@ -186,6 +186,27 @@ jupyter lab notebooks/eda_raw_prices.ipynb
 - **`validate_prices(df, assets)`** — 자동 품질 게이트: 자산 컬럼·순서, 인덱스 정렬·중복, NaN,
   가격>0, 극단 일간변동, 최소 행수. 위반 목록 반환. `tests/test_validate.py`로 박제.
 
+### 7-1. 수집 신뢰성 — 재시도 · 품질 게이트 · 캐시 보호
+
+**배경(2026-07-17·18 daily.yml 장애):** Yahoo가 CI 러너 IP를 간헐적으로 레이트리밋해
+`yfinance`가 **0행**을 반환했다(`수집 완료: 0일 × 5자산`, 기간 `NaT ~ NaT`). 당시 `collect`는
+이를 **"성공"으로 처리**했고, 빈 데이터가 흘러가 지표 계산에서 원인과 동떨어진
+`TypeError: NoneType - NoneType`(pandas-ta `sma`가 None 반환)으로 터졌다. 더 위험하게는,
+build가 통과했다면 `s3_sync`가 **빈 데이터로 팀 공용 S3 스냅샷을 덮어썼을** 것이다.
+
+**대응 — `collect.fetch_prices`가 두 겹으로 막는다:**
+
+| 층 | 동작 |
+|---|---|
+| ① 재시도 | `yf.download`를 지수 백오프로 재시도(기본 3회, 2→4→8초). 빈 응답·예외 모두 재시도 대상 — transient 레이트리밋을 흡수 |
+| ② 품질 게이트 | `validate_prices(prices, assets, min_rows)` 호출. 위반 시 **즉시 `ValueError`** (조용한 성공 금지) |
+| ③ 캐시 보호 | **게이트를 통과했을 때만** Parquet 기록 → 나쁜 데이터가 **좋은 캐시를 덮어쓰지 못한다** |
+
+- 기준 행수는 config `data.min_rows`(기본 1000). 전체 기간 기대치는 약 4,087행.
+- 2차 방어선으로 `features._asset_feature`가 pandas-ta의 `None` 반환을 감지해
+  **자산·지표·입력 행수를 담은 `ValueError`** 로 바꾼다(원인 즉시 파악).
+- `tests/test_collect.py`가 재시도 회복·빈 응답 실패·행수 미달·**캐시 미덮어씀**을 박제한다.
+
 ### 실데이터 관측 요약 (2009-10-01 ~ 2025-12-30, 4087일)
 - **무결성**: 결측 0, 0이하 가격 0, 극단 이동(|logret|>0.25) 0, 분할 미조정 의심 0 → **모든 검증 통과**.
   (영업일 대비 갭 152는 16년치 미국 증시 공휴일로 정상.)
@@ -328,4 +349,4 @@ fold train 구간이 `anchor ~ train_end`로 **거래일 위치 기준** 고정�
 | v0.7 | 2026-07-13 | precompute 생산자 구현(`src/inference/precompute.py`)·`config.inference` 섹션 반영. build_today_obs(민지 글루)·generate_latest(도현 모델 파트) 접점 계약 확정. |
 | v0.8 | 2026-07-15 | 이슈 #27: `train.py`가 학습 fold의 build `run_id`를 provenance로 기록(MLflow 파라미터·모델 파일명). `feature_store.latest_run_id_for_fold` 추가. 배포 시 `config.inference.scaler_run_id`에 복사. |
 | v0.9 | 2026-07-18 | §8-1 추가: 배포 산출물(policy.zip + meta.sqlite) 반출 절차. RunPod 실학습 중 발견 — build `run_id`가 타임스탬프 기반이라 재현 불가하므로 `meta.sqlite`를 함께 옮기지 않으면 정규화 재현이 실패한다. |
-| v0.10 | 2026-07-19 | §8-1 개정: `meta.sqlite` 반출 불필요로 정정. `scaler_run_id`를 비우면 같은 `config_hash`의 최신 build run을 자동 선택하도록 `_restore_scaler` 개선(`feature_store.latest_run_id_for_config`). 재빌드 통계 동일성 실측(최대 상대오차 7.4e-4) 근거 첨부. 민지 제안(이슈 #33). |
+| v0.10 | 2026-07-19 | §7-1 추가: 수집 신뢰성(재시도·품질 게이트·캐시 보호). daily.yml 7/17·18 연속 실패 대응 — CI 레이트리밋으로 온 0행이 "성공"으로 통과해 빈 데이터가 파이프라인에 유입되던 결함 수정. `config.data.min_rows` 추가. |
