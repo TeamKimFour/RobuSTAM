@@ -8,8 +8,9 @@ Vercel 배포 대상 대시보드. Plotly.js로 자산 비중·성과곡선을 �
 | 경로 | 목적 | 데이터 소스 |
 | --- | --- | --- |
 | `/` | 랜딩 페이지 | 정적 |
-| `/inference` | 오늘의 권장 자산 비중 + 배치 상태 | **`GET /inference/latest`** (FastAPI) |
-| `/backtest` | 성과곡선·Drawdown·벤치마크 비교·KPI | 현재 시연용 합성 데이터 (엔진 API 결정 후 교체) |
+| `/inference` | 오늘의 권장 자산 비중 + 시장 상태 지표 | **`GET /inference/latest`** (실 API) · 시장 지표는 mock |
+| `/backtest` | 성과·롤링·리스크·자산분해·극단분석 통합 리포트 | 현재 시연용 합성 데이터 |
+| `/models` | MLflow 실험 랭킹·학습 곡선·하이퍼파라미터·배포 모델 | mock (MLflow API 프록시 전) |
 | `/dashboard` | 하위 호환용 리다이렉트 → `/inference` | — |
 
 ## 환경변수
@@ -34,10 +35,24 @@ Vercel 배포 대상 대시보드. Plotly.js로 자산 비중·성과곡선을 �
 
 ### `/backtest` — API 미연결(시연용)
 
-- KPI(CAGR / Sharpe / MDD / Vol), 누적 성과 곡선, Drawdown 곡선, 전략별 지표 테이블.
-- 데이터는 결정론적 합성(`app/backtest/mock.ts`, seed 고정). 실 데이터가 아니라는
-  경고 배지를 상단에 표기.
-- 백엔드 백테스트 결과 조회 엔드포인트가 확정되면 `mock.ts` → API fetch로 교체.
+섹션 구성:
+- **핵심 지표**: KPI(CAGR/Sharpe/MDD/Vol) + 확장 리스크(Sortino, Calmar, VaR/CVaR 95%, Skew, Kurtosis, Beta, Hit Ratio, Best/Worst day).
+- **성과 vs 벤치마크**: 누적 NAV(1/N·60:40·B&H 오버레이), Drawdown 곡선, 전략 비교표, 벤치마크 대비 초과수익(α) 시계열.
+- **롤링·시즈널 분석**: Rolling Sharpe(252d)·Rolling Vol 이중축, 월별 수익률 히트맵.
+- **거래·비용**: 일일 Turnover 바 + 누적 거래비용(초기 NAV 대비 %) 이중축.
+- **자산 분해**: 자산별 누적 P&L 기여도 스택 영역, 자산 상관계수 히트맵, walk-forward Fold별 성과표.
+- **극단·수중 분석**: Underwater 지속기간 히스토그램, Best·Worst 10 거래일.
+- 모든 시계열은 `app/backtest/mock.ts`에서 결정론적으로 파생(seed 고정, 자산 5종의 일별 mock 수익률과 mock 비중 스케줄로부터 NAV/turnover/기여도 등이 일관되게 계산됨).
+- 백엔드 백테스트 결과 조회 엔드포인트 확정 시 `mock.ts` → API fetch로 교체.
+
+### `/models` — MLflow 대시(mock)
+
+- 배포 모델 카드(run_id, model_version, config_hash, scaler fold).
+- 배포 하이퍼파라미터(PPO, learning_rate, gamma, GAE 등).
+- 학습 곡선(reward·entropy·KL).
+- Fold × Seed × Timesteps 그리드 히트맵.
+- 12개 run 랭킹표. 이슈 #34(과매매로 valid Sharpe 음수) 경고 배너 상단 노출.
+
 
 ## API 계약
 
