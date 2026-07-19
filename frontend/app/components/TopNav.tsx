@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const NAV_ITEMS = [
   { href: "/backtest", label: "Backtest" },
   { href: "/inference", label: "Inference" },
+  { href: "/models", label: "Models" },
 ] as const;
 
 export default function TopNav() {
