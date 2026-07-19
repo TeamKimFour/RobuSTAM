@@ -122,9 +122,58 @@ def test_latest_run_id_none_when_db_missing(tmp_path):
     assert fs.latest_run_id_for_fold(str(tmp_path / "nope.sqlite"), 1) is None
 
 
+def _hash_cfg(**over):
+    """해시 대상 섹션을 모두 갖춘 최소 config(테스트용)."""
+    cfg = {
+        "assets": list(s.ASSETS),
+        "window": 30,
+        "features": {"params": {"rsi_length": 14, "macd": [12, 26, 9]}},
+        "normalize": {"returns_scope": "per_asset", "feature_scope": "per_column", "eps": 1e-8},
+        "split": {"anchor_start": "2010-01-01", "valid_days": 252, "embargo_days": 34},
+        # 아래는 해시 비대상 — 바뀌어도 통계가 달라지지 않는다
+        "transaction_cost": 0.001,
+        "data": {"start": "2009-10-01", "end": "2025-12-31"},
+    }
+    cfg.update(over)
+    return cfg
+
+
 def test_config_hash_detects_change():
-    base = {"assets": list(s.ASSETS), "window": 30}
-    same = {"assets": list(s.ASSETS), "window": 30}
-    changed = {"assets": list(s.ASSETS), "window": 20}
-    assert fs.config_hash(base) == fs.config_hash(same)
-    assert fs.config_hash(base) != fs.config_hash(changed)
+    assert fs.config_hash(_hash_cfg()) == fs.config_hash(_hash_cfg())  # 결정적
+    assert fs.config_hash(_hash_cfg()) != fs.config_hash(_hash_cfg(window=20))
+
+
+def test_config_hash_covers_stat_changing_sections():
+    """통계 값을 바꾸는 설정은 모두 해시에 반영돼야 한다.
+
+    자동 run 해석(latest_run_id_for_config)의 유일한 안전장치라, 여기 빠지면
+    비호환 build를 조용히 집는다.
+    """
+    base = fs.config_hash(_hash_cfg())
+
+    # 지표 파라미터 — 지표 값 자체가 달라짐
+    assert base != fs.config_hash(
+        _hash_cfg(features={"params": {"rsi_length": 21, "macd": [12, 26, 9]}})
+    )
+    # 정규화 스코프 — μ/σ 정의가 달라짐
+    assert base != fs.config_hash(
+        _hash_cfg(normalize={"returns_scope": "per_column",
+                             "feature_scope": "per_column", "eps": 1e-8})
+    )
+    # fold 경계 — train 구간이 달라져 통계가 달라짐
+    assert base != fs.config_hash(
+        _hash_cfg(split={"anchor_start": "2012-01-01", "valid_days": 252, "embargo_days": 34})
+    )
+    # 자산 구성
+    assert base != fs.config_hash(_hash_cfg(assets=["SPY", "EWY", "TLT", "GLD", "IEF"]))
+
+
+def test_config_hash_ignores_non_stat_settings():
+    """통계와 무관한 설정은 해시를 흔들지 않는다(불필요한 재빌드 방지)."""
+    base = fs.config_hash(_hash_cfg())
+    # 수집 기간: fold 경계는 anchor·test_blocks가 정하고 신규 데이터는 뒤에만 붙는다
+    assert base == fs.config_hash(_hash_cfg(data={"start": "2009-10-01", "end": "2026-12-31"}))
+    # 거래비용: 환경·보상의 값이지 데이터 산출물과 무관
+    assert base == fs.config_hash(_hash_cfg(transaction_cost=0.002))
+    # 소비 측 설정
+    assert base == fs.config_hash(_hash_cfg(inference={"model_path": "x.zip"}))
