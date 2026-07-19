@@ -36,7 +36,11 @@ from src.config_loader import (
 from src.data import schema
 from src.data.assemble import assemble_state_matrix
 from src.data.collect import load_raw
-from src.data.feature_store import read_scaler_stats
+from src.data.feature_store import (
+    config_hash,
+    latest_run_id_for_config,
+    read_scaler_stats,
+)
 from src.data.features import compute_features
 from src.data.normalize import ZScoreScaler
 from src.data.returns import log_returns
@@ -48,16 +52,30 @@ def _restore_scaler(cfg: dict) -> ZScoreScaler:
 
     build.py가 fold train에서 fit해 저장한 통계를 그대로 재사용 → 학습과 동일한 z-score를
     룩어헤드 없이 재현한다.
+
+    `scaler_run_id`가 비어 있으면 **현재 config의 `config_hash`로 만들어진 최신 build run**을
+    자동 선택한다. build run_id는 타임스탬프를 포함해 머신 간 재현이 불가능하지만, 같은
+    config로 재빌드하면 통계가 사실상 동일하므로(실측 최대 상대오차 7.4e-4) CI·서버가 각자
+    build한 뒤 자기 run을 쓰면 된다 — `meta.sqlite`를 옮길 필요가 없다(이슈 #33).
+    정확한 감사 추적이 필요하면 `scaler_run_id`를 명시해 고정한다.
     """
     inf = get_inference(cfg)
-    run_id = inf.get("scaler_run_id")
     fold_id = inf.get("scaler_fold_id")
+    meta_db = cfg["data"]["meta_db"]
+
+    run_id = inf.get("scaler_run_id")
     if not run_id:
-        raise ValueError(
-            "config inference.scaler_run_id가 비어 있습니다 — 배포 policy가 학습된 "
-            "build run_id를 채워야 합니다(도현 train.py provenance 참고)."
-        )
-    stats = read_scaler_stats(cfg["data"]["meta_db"], run_id, int(fold_id))
+        cfg_hash = config_hash(cfg)
+        run_id = latest_run_id_for_config(meta_db, cfg_hash)
+        if not run_id:
+            raise ValueError(
+                f"config_hash={cfg_hash!r}로 만들어진 build run이 없습니다 "
+                f"(meta_db={meta_db!r}). `python -m src.data.build`를 먼저 실행하거나, "
+                "config inference.scaler_run_id에 사용할 run_id를 명시하세요."
+            )
+        print(f"[precompute] scaler_run_id 미지정 → 자동 선택: {run_id} (config_hash={cfg_hash})")
+
+    stats = read_scaler_stats(meta_db, run_id, int(fold_id))
     if not stats:
         raise ValueError(
             f"scaler_stats가 비어 있습니다: run_id={run_id!r}, fold_id={fold_id} "

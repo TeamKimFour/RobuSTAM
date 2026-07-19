@@ -91,14 +91,14 @@ model:
 #    precompute → API 배선이 도는지 확인하는 용도로만 쓰고, 실제 투자 판단 근거로
 #    삼지 않는다. 성능 개선 후 재선정 필요.
 #
-# ⚠️ 이 값만으로는 동작하지 않는다. 학습 머신에서 두 파일을 함께 반출해야 한다
-#    (docs/data_pipeline.md §8-1, 이슈 #33):
-#      - model_path가 가리키는 policy.zip
-#      - data/feature_store/meta.sqlite  ← scaler_run_id의 통계. build run_id가
-#        타임스탬프 기반이라 재빌드로는 같은 키가 재현되지 않는다.
+# ⚠️ policy.zip은 학습 머신에서 반출해야 한다(gitignore 대상, 이슈 #33).
+#    반면 meta.sqlite는 옮길 필요가 없다 — scaler_run_id를 비워두면 각자 build한
+#    최신 run(같은 config_hash)을 자동으로 쓴다. 자세한 근거는 docs/data_pipeline.md §8-1.
 inference:
   # 선택 근거: python -m src.models.select (valid_sharpe 기준, 12개 run 중 최고)
   model_path: "mlruns/models/ppo_fold1_b461a86027e2-20260718102003_50db7bc4c4a541bb843c6d58d190bee5.zip"
-  scaler_run_id: "b461a86027e2-20260718102003"  # meta.sqlite scaler_stats 조회 키
-  scaler_fold_id: 1                             # fold는 1부터 (splits.py 1-indexed)
+  # 비워두면 현재 config_hash의 최신 build run을 자동 선택한다(권장 — 머신마다 run_id가 달라짐).
+  # 감사 추적을 위해 특정 build에 고정하려면 그 run_id를 명시한다.
+  scaler_run_id: ""
+  scaler_fold_id: 1                             # 배포 policy가 학습된 fold (1부터 — splits.py)
   model_version: "ppo-fold1-50db7bc4"           # latest.json에 기록되는 버전 태그
