@@ -3,11 +3,20 @@
 import { useCallback, useEffect, useState } from "react";
 import AllocationCard from "../components/AllocationCard";
 import ApiStatusCard from "../components/ApiStatusCard";
+import AssetIndicatorsGrid from "../components/AssetIndicatorsGrid";
 import DailyChangeCard from "../components/DailyChangeCard";
 import DemoBadge from "../components/DemoBadge";
 import FeaturesPanel from "../components/FeaturesPanel";
 import HistoryTable from "../components/HistoryTable";
 import InferenceMetaCard from "../components/InferenceMetaCard";
+import MarketGaugeCard from "../components/MarketGaugeCard";
+import ReturnsHeatmap from "../components/ReturnsHeatmap";
+import {
+  ASSET_INDICATORS,
+  MARKET_GAUGES,
+  RECENT_RETURNS_30D,
+  RECENT_RETURNS_DATES,
+} from "../backtest/mock";
 import { fetchLatestInference, type ApiResult, type LatestInference } from "../lib/api";
 
 type State =
@@ -52,13 +61,7 @@ export default function InferenceView() {
       ) : state.status === "error" ? (
         <ApiStatusCard error={state.error} onRetry={load} />
       ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 20,
-          }}
-        >
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
           <AllocationCard date={state.data.date} weights={state.data.weights} />
           <InferenceMetaCard
             generatedAt={state.data.generated_at}
@@ -68,13 +71,46 @@ export default function InferenceView() {
         </div>
       )}
 
-      <SectionTitle>전일 대비 변동성 <DemoBadge /></SectionTitle>
-      <DailyChangeCard />
+      <SectionLabel>시장 상태 <DemoBadge /></SectionLabel>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 20,
+          alignItems: "stretch",
+        }}
+      >
+        <div style={{ display: "grid", gridTemplateRows: "1fr 1fr", gap: 20 }}>
+          <MarketGaugeCard
+            title="Equity / Bond Ratio (MA20)"
+            value={MARKET_GAUGES.equityBondRatio}
+            min={0.5}
+            max={2.0}
+            neutral={1.0}
+            leftLabel="채권 우위"
+            rightLabel="주식 우위"
+            hint="SPY / TLT 비율의 20일 이동평균. 1 이상이면 위험자산 국면이 강해지고 있음을 시사."
+          />
+          <MarketGaugeCard
+            title="Gold Volatility Ratio"
+            value={MARKET_GAUGES.goldVolRatio}
+            min={0.3}
+            max={2.0}
+            neutral={1.0}
+            leftLabel="변동성 축소"
+            rightLabel="변동성 확대"
+            hint="금 단기 변동성 / 장기 변동성. 1 이상이면 안전자산에도 리스크가 확대되는 국면."
+          />
+        </div>
+        <DailyChangeCard />
+      </div>
+      <AssetIndicatorsGrid rows={ASSET_INDICATORS} />
+      <ReturnsHeatmap data={RECENT_RETURNS_30D} dates={RECENT_RETURNS_DATES} />
 
-      <SectionTitle>권장 배분 근거 <DemoBadge /></SectionTitle>
+      <SectionLabel>권장 배분 근거 <DemoBadge /></SectionLabel>
       <FeaturesPanel />
 
-      <SectionTitle>최근 이력 <DemoBadge /></SectionTitle>
+      <SectionLabel>최근 이력 <DemoBadge /></SectionLabel>
       <HistoryTable />
 
       <footer
@@ -102,23 +138,10 @@ function PageHeader({ onRefresh, refreshing }: { onRefresh: () => void; refreshi
       }}
     >
       <div>
-        <h1
-          style={{
-            margin: 0,
-            fontSize: 24,
-            fontWeight: 700,
-            letterSpacing: "-0.02em",
-          }}
-        >
+        <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, letterSpacing: "-0.02em" }}>
           Inference
         </h1>
-        <p
-          style={{
-            margin: "6px 0 0 0",
-            color: "var(--muted)",
-            fontSize: 13,
-          }}
-        >
+        <p style={{ margin: "6px 0 0 0", color: "var(--muted)", fontSize: 13 }}>
           시장 상태 → 익일 최적 자산 비중. FastAPI /inference/latest 실시간 조회.
         </p>
       </div>
@@ -142,15 +165,16 @@ function PageHeader({ onRefresh, refreshing }: { onRefresh: () => void; refreshi
   );
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
+function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <h2
       style={{
-        margin: "8px 0 -4px 0",
-        fontSize: 14,
+        margin: "16px 0 -4px 0",
+        fontSize: 13,
         fontWeight: 600,
         color: "var(--muted)",
-        letterSpacing: "0.02em",
+        letterSpacing: "0.05em",
+        textTransform: "uppercase",
       }}
     >
       {children}
@@ -160,13 +184,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 function SkeletonRow() {
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 1fr",
-        gap: 20,
-      }}
-    >
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
       <SkeletonCard height={340} />
       <SkeletonCard height={340} />
     </div>

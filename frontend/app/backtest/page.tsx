@@ -1,12 +1,34 @@
 import TopNav from "../components/TopNav";
+import AlphaChart from "./AlphaChart";
 import BenchmarkTable from "./BenchmarkTable";
+import BestWorstDaysCard from "./BestWorstDaysCard";
+import ContributionChart from "./ContributionChart";
+import CorrelationHeatmap from "./CorrelationHeatmap";
+import ExtendedRiskCard from "./ExtendedRiskCard";
+import FoldComparisonCard from "./FoldComparisonCard";
 import MetricsRow from "./MetricsRow";
+import MonthlyReturnsHeatmap from "./MonthlyReturnsHeatmap";
 import PerformanceChart from "./PerformanceChart";
+import RollingMetricsChart from "./RollingMetricsChart";
+import TurnoverChart from "./TurnoverChart";
+import UnderwaterCard from "./UnderwaterCard";
 import {
+  ASSET_CONTRIBUTION_SERIES,
   BACKTEST_METRICS,
   BACKTEST_SERIES,
   BENCHMARK_TABLE,
+  CORRELATION_MATRIX,
+  CUM_COST_SERIES,
+  EXTENDED_RISK,
+  FOLD_TABLE,
+  TURNOVER_SERIES,
+  alphaSeries,
+  bestWorstDays,
   drawdownSeries,
+  monthlyReturns,
+  rollingSharpe,
+  rollingVol,
+  underwaterDurations,
 } from "./mock";
 
 export const metadata = {
@@ -14,13 +36,22 @@ export const metadata = {
 };
 
 export default function BacktestPage() {
-  const drawdown = [
+  const rl = BACKTEST_SERIES[0];
+  const bench6040 = BACKTEST_SERIES[1];
+
+  const dd = [
     {
-      name: BACKTEST_SERIES[0].name,
-      color: BACKTEST_SERIES[0].color,
-      points: drawdownSeries(BACKTEST_SERIES[0].points),
+      name: rl.name,
+      color: rl.color,
+      points: drawdownSeries(rl.points),
     },
   ];
+  const sharpe = rollingSharpe(rl.points);
+  const vol = rollingVol(rl.points);
+  const monthly = monthlyReturns(rl.points);
+  const alpha = alphaSeries(rl, bench6040);
+  const bw = bestWorstDays(10);
+  const underwater = underwaterDurations(rl.points);
 
   return (
     <>
@@ -43,45 +74,50 @@ export default function BacktestPage() {
           }}
         >
           <div>
-            <h1
-              style={{
-                margin: 0,
-                fontSize: 24,
-                fontWeight: 700,
-                letterSpacing: "-0.02em",
-              }}
-            >
+            <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, letterSpacing: "-0.02em" }}>
               Backtest
             </h1>
-            <p
-              style={{
-                margin: "6px 0 0 0",
-                color: "var(--muted)",
-                fontSize: 13,
-              }}
-            >
+            <p style={{ margin: "6px 0 0 0", color: "var(--muted)", fontSize: 13 }}>
               편도 수수료 0.1% · 슬리피지 포함 · walk-forward test 구간
             </p>
           </div>
           <NotConnectedBadge />
         </header>
 
+        <SectionLabel>핵심 지표</SectionLabel>
         <MetricsRow metrics={BACKTEST_METRICS} />
+        <ExtendedRiskCard risk={EXTENDED_RISK} />
 
-        <PerformanceChart
-          title="누적 성과 (NAV, 초기 1.0)"
-          series={BACKTEST_SERIES}
-          yFormat="nav"
-        />
+        <SectionLabel>성과 vs 벤치마크</SectionLabel>
+        <PerformanceChart title="누적 NAV (초기 1.0)" series={BACKTEST_SERIES} yFormat="nav" />
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
+          <PerformanceChart title="Drawdown (%)" series={dd} yFormat="percent" height={280} />
+          <BenchmarkTable rows={BENCHMARK_TABLE} />
+        </div>
 
-        <PerformanceChart
-          title="Drawdown (%)"
-          series={drawdown}
-          yFormat="percent"
-          height={220}
-        />
+        <AlphaChart title={`벤치마크 대비 초과수익 (vs ${bench6040.name})`} alpha={alpha} />
 
-        <BenchmarkTable rows={BENCHMARK_TABLE} />
+        <SectionLabel>롤링·시즈널 분석</SectionLabel>
+        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 20 }}>
+          <RollingMetricsChart title="Rolling Sharpe · Vol" sharpe={sharpe} vol={vol} />
+          <MonthlyReturnsHeatmap data={monthly} />
+        </div>
+
+        <SectionLabel>거래·비용</SectionLabel>
+        <TurnoverChart turnover={TURNOVER_SERIES} cumCost={CUM_COST_SERIES} />
+
+        <SectionLabel>자산 분해</SectionLabel>
+        <ContributionChart series={ASSET_CONTRIBUTION_SERIES} />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          <CorrelationHeatmap matrix={CORRELATION_MATRIX} />
+          <FoldComparisonCard rows={FOLD_TABLE} />
+        </div>
+
+        <SectionLabel>극단·수중 분석</SectionLabel>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          <UnderwaterCard durations={underwater} />
+          <BestWorstDaysCard best={bw.best} worst={bw.worst} />
+        </div>
 
         <footer
           style={{
@@ -95,6 +131,23 @@ export default function BacktestPage() {
         </footer>
       </main>
     </>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <h2
+      style={{
+        margin: "16px 0 -4px 0",
+        fontSize: 13,
+        fontWeight: 600,
+        color: "var(--muted)",
+        letterSpacing: "0.05em",
+        textTransform: "uppercase",
+      }}
+    >
+      {children}
+    </h2>
   );
 }
 
