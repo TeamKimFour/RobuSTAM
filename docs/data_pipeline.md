@@ -12,7 +12,7 @@
 |---|---|---|
 | 설정 단일 출처 | `config/config.yaml`, `src/config_loader.py` | ✅ 구현 |
 | State 인덱스맵 | `src/data/schema.py` | ✅ 구현 |
-| 원시 수집 | `src/data/collect.py` | ✅ 구현 |
+| 원시 수집 | `src/data/collect.py` | ✅ 구현 (재시도·품질 게이트 §7-1) |
 | 로그수익률·윈도우 | `src/data/returns.py` | ✅ 구현 |
 | 기술적 지표 6+2 | `src/data/features.py` | ✅ 구현 |
 | 187차원 조립 | `src/data/assemble.py` | ✅ 구현 |
@@ -185,6 +185,27 @@ jupyter lab notebooks/eda_raw_prices.ipynb
   Plotly 차트(가격 추이·수익률 분포·상관 히트맵·롤링 변동성)와 함께 시각적으로 탐색.
 - **`validate_prices(df, assets)`** — 자동 품질 게이트: 자산 컬럼·순서, 인덱스 정렬·중복, NaN,
   가격>0, 극단 일간변동, 최소 행수. 위반 목록 반환. `tests/test_validate.py`로 박제.
+
+### 7-1. 수집 신뢰성 — 재시도 · 품질 게이트 · 캐시 보호
+
+**배경(2026-07-17·18 daily.yml 장애):** Yahoo가 CI 러너 IP를 간헐적으로 레이트리밋해
+`yfinance`가 **0행**을 반환했다(`수집 완료: 0일 × 5자산`, 기간 `NaT ~ NaT`). 당시 `collect`는
+이를 **"성공"으로 처리**했고, 빈 데이터가 흘러가 지표 계산에서 원인과 동떨어진
+`TypeError: NoneType - NoneType`(pandas-ta `sma`가 None 반환)으로 터졌다. 더 위험하게는,
+build가 통과했다면 `s3_sync`가 **빈 데이터로 팀 공용 S3 스냅샷을 덮어썼을** 것이다.
+
+**대응 — `collect.fetch_prices`가 두 겹으로 막는다:**
+
+| 층 | 동작 |
+|---|---|
+| ① 재시도 | `yf.download`를 지수 백오프로 재시도(기본 3회, 2→4→8초). 빈 응답·예외 모두 재시도 대상 — transient 레이트리밋을 흡수 |
+| ② 품질 게이트 | `validate_prices(prices, assets, min_rows)` 호출. 위반 시 **즉시 `ValueError`** (조용한 성공 금지) |
+| ③ 캐시 보호 | **게이트를 통과했을 때만** Parquet 기록 → 나쁜 데이터가 **좋은 캐시를 덮어쓰지 못한다** |
+
+- 기준 행수는 config `data.min_rows`(기본 1000). 전체 기간 기대치는 약 4,087행.
+- 2차 방어선으로 `features._asset_feature`가 pandas-ta의 `None` 반환을 감지해
+  **자산·지표·입력 행수를 담은 `ValueError`** 로 바꾼다(원인 즉시 파악).
+- `tests/test_collect.py`가 재시도 회복·빈 응답 실패·행수 미달·**캐시 미덮어씀**을 박제한다.
 
 ### 실데이터 관측 요약 (2009-10-01 ~ 2025-12-30, 4087일)
 - **무결성**: 결측 0, 0이하 가격 0, 극단 이동(|logret|>0.25) 0, 분할 미조정 의심 0 → **모든 검증 통과**.
