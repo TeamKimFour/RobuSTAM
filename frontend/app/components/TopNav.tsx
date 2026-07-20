@@ -1,6 +1,17 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+
+const NAV_ITEMS = [
+  { href: "/backtest", label: "Backtest" },
+  { href: "/inference", label: "Inference" },
+  { href: "/models", label: "Models" },
+] as const;
 
 export default function TopNav() {
+  const pathname = usePathname();
+
   return (
     <header
       style={{
@@ -16,24 +27,24 @@ export default function TopNav() {
           RobuSTAM
         </Link>
         <nav style={{ display: "flex", gap: 24 }}>
-          <Link
-            href="/dashboard"
-            style={{ color: "var(--muted)", fontSize: 14, paddingBottom: 4 }}
-          >
-            Backtest
-          </Link>
-          <Link
-            href="/dashboard"
-            style={{
-              color: "var(--text)",
-              fontSize: 14,
-              borderBottom: "2px solid var(--accent)",
-              paddingBottom: 4,
-              fontWeight: 500,
-            }}
-          >
-            Inference
-          </Link>
+          {NAV_ITEMS.map((item) => {
+            const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                style={{
+                  color: active ? "var(--text)" : "var(--muted)",
+                  fontSize: 14,
+                  borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
+                  paddingBottom: 4,
+                  fontWeight: active ? 500 : 400,
+                }}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
         </nav>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
