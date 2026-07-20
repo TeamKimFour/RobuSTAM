@@ -375,16 +375,35 @@ fold train 구간이 `anchor ~ train_end`로 **거래일 위치 기준** 고정�
 > 매일 build하므로 CI는 다음 실행에서 자연히 회복되고, 로컬은 `python -m src.data.build` 한 번이면 된다.
 > (통계 값 자체는 재빌드해도 동일하므로 — 위 실측 7.4e-4 — 정책 호환성에는 영향이 없다.)
 
-#### policy.zip 반출 방법
-- **현재(수동)**: RunPod은 `runpodctl send <파일>` → 로컬에서 `runpodctl receive <코드>`.
-  컨테이너 디스크는 파드를 Stop/Terminate하면 삭제되므로 **끄기 전에** 받아야 한다.
-- **지향점**: S3(`config.data.s3_bucket`) 업로드 자동화. 찬휘 AWS 세팅 완료 후 `s3_sync`와
-  같은 방식으로 policy를 올리면 학습 머신과 서빙 머신이 완전히 분리된다(이슈 #33).
+#### policy.zip 반출 — S3 (`src/models/publish.py`)
+
+학습 머신에서 올리고 서빙 환경에서 내려받는다. 버킷·프리픽스 규칙은 `s3_sync`와 동일하다
+(환경변수 `S3_BUCKET`/`S3_PREFIX`가 config를 override — CI에서 GitHub Variables 주입).
+
+```bash
+python -m src.models.publish upload      # 학습 머신 (RunPod 등)
+python -m src.models.publish download    # 서빙 환경 (CI·EC2) — precompute 직전
+```
+
+**키 규칙 — 파일명을 그대로 보존한다:**
+```
+<prefix>/models/ppo_fold<id>_<build_run_id>_<mlflow_run_id>.zip
+```
+`train.py`가 만드는 파일명이 이미 fold·build run·학습 run을 인코딩해 자기설명적이고 충돌이
+없으므로, 별도 키 체계를 만들지 않는다(규칙이 하나 더 느는 것을 피한다).
+
+**`config.inference.model_path`는 로컬 경로 그대로 둔다.** S3 키는 그 basename에서 결정적으로
+유도되므로(`model_s3_key`), config 스키마를 바꾸지 않고도 양쪽이 같은 파일을 가리킨다. 학습
+머신과 서빙 환경의 디렉토리 구조가 달라도 되고, `download`가 부모 디렉토리를 알아서 만든다.
+
+> **수동 대안(RunPod)**: `runpodctl send <파일>` → 로컬에서 `runpodctl receive <코드>`.
+> 컨테이너 디스크는 파드를 Stop/Terminate하면 삭제되므로 **끄기 전에** 받아야 한다.
 
 ### 아직 정해지지 않은 것
 - daily.yml precompute 스텝 활성 시점 — 도현 실제 policy.zip + `inference` 값 확정 후(§작업④).
+  `publish download` → `precompute` 순서로 붙이면 된다.
 - 배치 실패 시 이전 `latest.json` 유지 여부(현재는 원자적 덮어쓰기라 성공 시에만 교체).
-- **policy.zip 반출 자동화**(§8-1) — 현재 수동 전송. S3 경로 확정 필요(이슈 #33).
+- 배포 policy 교체 시 이전 모델의 S3 보관 정책(버전 유지 기간·정리 주기).
 
 ---
 
@@ -403,3 +422,4 @@ fold train 구간이 `anchor ~ train_end`로 **거래일 위치 기준** 고정�
 | v0.10 | 2026-07-19 | §8-1 개정: `meta.sqlite` 반출 불필요로 정정. `scaler_run_id`를 비우면 같은 `config_hash`의 최신 build run을 자동 선택하도록 `_restore_scaler` 개선(`feature_store.latest_run_id_for_config`). 재빌드 통계 동일성 실측(최대 상대오차 7.4e-4) 근거 첨부. 민지 제안(이슈 #33). |
 | v0.11 | 2026-07-19 | `config_hash` 범위를 `features`·`normalize`·`split`까지 확대(PR #36 후속). 자동 run 해석의 유일한 안전장치이므로 통계 값을 바꾸는 설정을 모두 포함해 비호환 build를 조용히 선택하지 못하게 한다. `data.start/end`·`transaction_cost`는 통계 불변이라 의도적으로 제외. 기존 run_id는 재빌드 후 자동 회복. |
 | v0.12 | 2026-07-19 | §7-2 추가: S3 실연결 검증 기록(daily.yml 수동 트리거로 OIDC 인증·업로드 20개 파일 확인). §1 표·§3·README의 "AWS 세팅 후 활성" 표기를 활성 완료로 정정. (§7-1 수집 신뢰성은 PR #37에서 추가됐으나 머지 중 이력 항목이 누락돼 여기 함께 기록한다.) |
+| v0.13 | 2026-07-20 | 이슈 #33: policy.zip S3 반출 구현(`src/models/publish.py`). 키는 파일명 보존(`<prefix>/models/<name>.zip`)이라 `config.inference.model_path`(로컬 경로) 스키마 변경 불필요 — S3 키를 basename에서 유도한다. §8-1 반출 방법을 수동 전송에서 `publish upload`/`download`로 교체. |
