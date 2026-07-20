@@ -381,8 +381,28 @@ fold train 구간이 `anchor ~ train_end`로 **거래일 위치 기준** 고정�
 - **지향점**: S3(`config.data.s3_bucket`) 업로드 자동화. 찬휘 AWS 세팅 완료 후 `s3_sync`와
   같은 방식으로 policy를 올리면 학습 머신과 서빙 머신이 완전히 분리된다(이슈 #33).
 
+### 8-2. 서빙 컨테이너의 latest.json 수신 — S3 polling (PR #42 논의, 옵션 b)
+
+프로덕션 `docker-compose.prod.yml`의 `fastapi` 컨테이너는 호스트와 데이터 볼륨을 공유하지
+않는 stateless 구조다. `daily.yml` 배치(민지 담당)가 만든 `latest.json`을 받으려면 컨테이너가
+스스로 S3에서 내려받아야 한다.
+
+**S3 키 계약**: `s3://{data.s3_bucket}/{data.s3_prefix}/precompute/latest.json`
+(`src/data/s3_sync.py`가 쓰는 `raw`/`feature_store`와 동일한 prefix 규칙). 이 경로로
+업로드하는 쪽 구현은 민지 담당(`daily.yml` precompute 활성화와 함께).
+
+**수신 구현** — `src/inference/s3_fetch.py`:
+- 컨테이너 기동 시 1회 + 이후 `PRECOMPUTE_SYNC_INTERVAL_SEC`(기본 300초) 간격으로 반복 다운로드.
+- `docker/api_entrypoint.sh`가 `PRECOMPUTE_S3_SYNC=true`일 때만 백그라운드로 띄운다 — 로컬
+  `docker-compose.yml`(개발용)은 이 값이 없어 영향 없음.
+- 버킷 미설정·키 없음·네트워크 오류는 모두 조용히 skip한다(예외를 던지지 않음). `src/api/main.py`가
+  파일 없음을 이미 503으로 정상 처리하므로, 초기 배포 시점(S3에 아직 아무것도 없을 때)에도
+  컨테이너가 죽지 않는다.
+
 ### 아직 정해지지 않은 것
 - daily.yml precompute 스텝 활성 시점 — 도현 실제 policy.zip + `inference` 값 확정 후(§작업④).
+- **daily.yml에서 `latest.json`을 §8-2 S3 키로 업로드하는 부분** — 민지 담당, 아직 미구현.
+  구현 전까지는 §8-2 수신 로직이 "S3에 키 없음"으로 매번 skip한다(정상 동작).
 - 배치 실패 시 이전 `latest.json` 유지 여부(현재는 원자적 덮어쓰기라 성공 시에만 교체).
 - **policy.zip 반출 자동화**(§8-1) — 현재 수동 전송. S3 경로 확정 필요(이슈 #33).
 
@@ -403,3 +423,4 @@ fold train 구간이 `anchor ~ train_end`로 **거래일 위치 기준** 고정�
 | v0.10 | 2026-07-19 | §8-1 개정: `meta.sqlite` 반출 불필요로 정정. `scaler_run_id`를 비우면 같은 `config_hash`의 최신 build run을 자동 선택하도록 `_restore_scaler` 개선(`feature_store.latest_run_id_for_config`). 재빌드 통계 동일성 실측(최대 상대오차 7.4e-4) 근거 첨부. 민지 제안(이슈 #33). |
 | v0.11 | 2026-07-19 | `config_hash` 범위를 `features`·`normalize`·`split`까지 확대(PR #36 후속). 자동 run 해석의 유일한 안전장치이므로 통계 값을 바꾸는 설정을 모두 포함해 비호환 build를 조용히 선택하지 못하게 한다. `data.start/end`·`transaction_cost`는 통계 불변이라 의도적으로 제외. 기존 run_id는 재빌드 후 자동 회복. |
 | v0.12 | 2026-07-19 | §7-2 추가: S3 실연결 검증 기록(daily.yml 수동 트리거로 OIDC 인증·업로드 20개 파일 확인). §1 표·§3·README의 "AWS 세팅 후 활성" 표기를 활성 완료로 정정. (§7-1 수집 신뢰성은 PR #37에서 추가됐으나 머지 중 이력 항목이 누락돼 여기 함께 기록한다.) |
+| v0.13 | 2026-07-20 | §8-2 추가: 프로덕션 서빙 컨테이너의 `latest.json` S3 수신 계약·구현(`src/inference/s3_fetch.py`, `docker/api_entrypoint.sh`). PR #42 코멘트(민지) 논의에서 옵션 (b) "컨테이너가 주기적으로 S3에서 받아오기"로 결정. 업로드 측(daily.yml)은 민지 담당으로 남아 있음. |

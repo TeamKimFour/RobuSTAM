@@ -80,10 +80,15 @@ curl -k https://localhost/health
 공인 도메인의 TLS 종단을 전담하는 구조다. 호스트에 포트를 열지 않고 `cloudflared`가
 아웃바운드로만 Cloudflare 엣지에 연결한다.
 
+`fastapi` 컨테이너는 데이터 볼륨을 공유하지 않는 stateless 구조라, 기동 시 + 주기적으로
+S3에서 `latest.json`을 직접 받아온다(`src/inference/s3_fetch.py`, `docs/data_pipeline.md` §8-2).
+
 ```bash
 # 1) .env.prod 준비 (최초 1회, git에 커밋되지 않음)
 cp .env.prod.example .env.prod
 # CLOUDFLARE_TUNNEL_TOKEN 값을 Cloudflare Zero Trust 대시보드에서 발급받아 채운다.
+# S3_BUCKET/S3_PREFIX는 보통 비워둬도 config.yaml 값을 그대로 쓴다.
+# AWS 자격증명은 배포 서버에 IAM Role(인스턴스 프로파일)이 있으면 비워둔다.
 
 # 2) 빌드 후 실행
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
