@@ -1,7 +1,7 @@
 name: Daily Feature Store
 
-# 매일 데이터 수집 → Feature Store 빌드 → (설정 시) S3 업로드.
-# 데일리 리밸런싱 서비스의 데이터 갱신 심장박동. precompute(오늘의 비중)는 모델 준비 후 추가.
+# 매일 데이터 수집 → Feature Store 빌드 → policy.zip 수신 → precompute → (설정 시) S3 업로드.
+# 데일리 리밸런싱 서비스의 데이터 갱신 심장박동.
 on:
   schedule:
     - cron: "0 22 * * *" # UTC 22:00 = KST 07:00 (전일 미국장 마감·데이터 확정 후)
@@ -34,17 +34,28 @@ jobs:
       - name: Feature Store 빌드
         run: python -m src.data.build
 
-      # precompute(오늘의 추천 비중) — config.inference 값(도현 배포 policy) 채운 뒤 활성화
-      # - name: 추천 비중 precompute
-      #   run: python -m src.inference.precompute
-
-      # ── 이하 S3 업로드: AWS role(vars.AWS_ROLE_ARN) 설정 시에만 실행 ──
+      # ── 이하 AWS role(vars.AWS_ROLE_ARN) 설정 시에만 실행 ──
       - name: AWS 자격증명 (OIDC)
         if: vars.AWS_ROLE_ARN != ''
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ap-northeast-2
+
+      # policy.zip 수신 — 학습 머신이 올린 배포 policy를 config.inference.model_path
+      # 위치로 내려받는다(이슈 #33, docs/data_pipeline.md §8-1). precompute가 이 파일을 로드.
+      - name: policy.zip 수신 (S3)
+        if: vars.AWS_ROLE_ARN != ''
+        env:
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+        run: python -m src.models.publish download
+
+      # precompute(오늘의 추천 비중) — config.inference 값이 채워져 있어 활성화(docs §8).
+      # AWS 미설정 환경(포크 등)에서는 policy.zip을 못 받아오므로 같은 조건으로 gate.
+      - name: 추천 비중 precompute
+        if: vars.AWS_ROLE_ARN != ''
+        run: python -m src.inference.precompute
 
       - name: S3 업로드
         if: vars.AWS_ROLE_ARN != ''

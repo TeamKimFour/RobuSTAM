@@ -69,8 +69,8 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
 - **`s3_sync.py`** — 로컬 data(raw·feature_store)를 S3에 업로드(boto3). `meta.sqlite`도 파일로 업로드
   (s3:// 직접쓰기 불가 회피). 버킷 미설정 시 skip. 실행 `python -m src.data.s3_sync`.
 - **`docker/Dockerfile.pipeline`** — collect·build 컨테이너 이미지(Python 3.12·핀 의존성).
-- **`.github/workflows/daily.yml`** — 매일 KST 07:00 cron: collect→build→**S3 업로드(활성)**.
-  precompute(오늘의 비중, §8)는 모델 준비 후 추가. S3 연결은 2026-07-19 실연결 검증 완료(§7-2).
+- **`.github/workflows/daily.yml`** — 매일 KST 07:00 cron: collect→build→policy.zip 수신→
+  **precompute(활성, §8-2)**→S3 업로드. S3 연결은 2026-07-19 실연결 검증 완료(§7-2).
 - **`feature_store.py`** — 가공된 187차원 피처의 저장·조회. Parquet 파티션 입출력
   (`write_features / load_features / partition_path`) + SQLite 메타
   (`init_meta_db / write_run / write_feature_columns / write_fold / read_*`). I/O 골격 구현 완료,
@@ -399,9 +399,27 @@ python -m src.models.publish download    # 서빙 환경 (CI·EC2) — precomput
 > **수동 대안(RunPod)**: `runpodctl send <파일>` → 로컬에서 `runpodctl receive <코드>`.
 > 컨테이너 디스크는 파드를 Stop/Terminate하면 삭제되므로 **끄기 전에** 받아야 한다.
 
+### 8-2. daily.yml 배치 활성화 — policy.zip 수신 + precompute
+
+`config.inference`(`model_path`/`scaler_fold_id`/`model_version`)가 채워지고 S3에 실제
+`policy.zip`이 올라간 것을 확인해 `daily.yml`에서 활성화했다. 순서:
+
+```
+collect → build → AWS 자격증명(OIDC) → policy.zip 수신(publish download) → precompute → S3 업로드
+```
+
+- **policy.zip 수신**이 AWS 인증 바로 다음, precompute 바로 앞으로 옮겨졌다 — precompute가
+  `config.inference.model_path` 위치에서 `PPO.load()`로 읽으므로 그 전에 파일이 있어야 한다.
+- **policy.zip 수신·precompute 모두 `vars.AWS_ROLE_ARN != ''`로 gate**했다. AWS가 아직 없는
+  환경(예: 포크)에서 precompute만 돌면 policy.zip이 없어 `PPO.load()`가 즉시 실패하므로,
+  기존 S3 관련 스텝과 같은 조건으로 묶어 그런 환경에서도 collect→build까지는 정상 종료되게 한다.
+- `scaler_run_id`는 비워둔 그대로다 — `_restore_scaler`가 이번에 막 실행된 `build`의
+  `config_hash` 최신 run을 자동 선택한다(§8-1 자동 해석, 재빌드 통계 동일성 근거 참고).
+
+> 배포된 policy의 valid 샤프가 **음수**(-0.13, 이슈 #34)라는 점은 변하지 않는다. 이 활성화는
+> "배선이 끝까지 도는가"를 확인하는 것이고, 결과값을 투자 판단에 쓰면 안 된다(config 주석 참고).
+
 ### 아직 정해지지 않은 것
-- daily.yml precompute 스텝 활성 시점 — 도현 실제 policy.zip + `inference` 값 확정 후(§작업④).
-  `publish download` → `precompute` 순서로 붙이면 된다.
 - 배치 실패 시 이전 `latest.json` 유지 여부(현재는 원자적 덮어쓰기라 성공 시에만 교체).
 - 배포 policy 교체 시 이전 모델의 S3 보관 정책(버전 유지 기간·정리 주기).
 
@@ -423,3 +441,4 @@ python -m src.models.publish download    # 서빙 환경 (CI·EC2) — precomput
 | v0.11 | 2026-07-19 | `config_hash` 범위를 `features`·`normalize`·`split`까지 확대(PR #36 후속). 자동 run 해석의 유일한 안전장치이므로 통계 값을 바꾸는 설정을 모두 포함해 비호환 build를 조용히 선택하지 못하게 한다. `data.start/end`·`transaction_cost`는 통계 불변이라 의도적으로 제외. 기존 run_id는 재빌드 후 자동 회복. |
 | v0.12 | 2026-07-19 | §7-2 추가: S3 실연결 검증 기록(daily.yml 수동 트리거로 OIDC 인증·업로드 20개 파일 확인). §1 표·§3·README의 "AWS 세팅 후 활성" 표기를 활성 완료로 정정. (§7-1 수집 신뢰성은 PR #37에서 추가됐으나 머지 중 이력 항목이 누락돼 여기 함께 기록한다.) |
 | v0.13 | 2026-07-20 | 이슈 #33: policy.zip S3 반출 구현(`src/models/publish.py`). 키는 파일명 보존(`<prefix>/models/<name>.zip`)이라 `config.inference.model_path`(로컬 경로) 스키마 변경 불필요 — S3 키를 basename에서 유도한다. §8-1 반출 방법을 수동 전송에서 `publish upload`/`download`로 교체. |
+| v0.14 | 2026-07-20 | §8-2 추가: `daily.yml`에 `publish download`·precompute 스텝 활성화(AWS 인증 뒤, S3 업로드 앞). `config.inference`가 채워지고 S3에 실제 policy.zip이 올라간 것을 확인 후 진행. 두 스텝 모두 `vars.AWS_ROLE_ARN` 조건으로 gate해 AWS 미설정 환경에서도 collect→build는 정상 종료되게 함. |
