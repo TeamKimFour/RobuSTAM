@@ -194,6 +194,14 @@ def train(
         if "n_steps" in model_cfg:
             # SB3 기본값(2048) 오버라이드 — 짧은 fold·테스트에서 rollout을 줄이는 용도.
             ppo_kwargs["n_steps"] = int(model_cfg["n_steps"])
+        # PPO 안정화 하이퍼파라미터 — config에 있을 때만 넘겨 SB3 기본값을 보존한다.
+        # 이슈 #34에서 `clip_fraction 0.33`·`approx_kl 0.038`로 업데이트가 과격한 것이
+        # 관측돼(과매매 원인 후보) 튜닝 통로를 연다. §2(보상·행동공간)와 무관한 학습 설정이다.
+        for key, cast in (("learning_rate", float), ("target_kl", float), ("ent_coef", float)):
+            if model_cfg.get(key) is not None:
+                ppo_kwargs[key] = cast(model_cfg[key])
+        mlflow.log_params({k: ppo_kwargs[k] for k in ("learning_rate", "target_kl", "ent_coef")
+                           if k in ppo_kwargs})
         model = PPO(policy, env, **ppo_kwargs)
         model.learn(total_timesteps=total_timesteps)
 

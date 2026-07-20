@@ -159,3 +159,45 @@ def test_train_end_to_end_with_stable_baselines3(tmp_path):
     assert result["seed"] == 7
     client = MlflowClient(tracking_uri=_to_tracking_uri(str(tmp_path / "mlruns")))
     assert client.get_run(result["run_id"]).data.params["seed"] == "7"
+
+
+def test_tuning_knobs_passed_to_ppo_and_logged(tmp_path):
+    """config의 learning_rate·target_kl이 PPO에 전달되고 MLflow에도 기록돼야 한다.
+
+    이슈 #34에서 learning_rate가 과매매를 좌우하는 지배 변수로 확인됐다(3e-4 → 1e-5로
+    회전율 0.86 → 0.04). 어떤 값으로 학습했는지 기록에 남지 않으면 실험 재현이 불가능하다.
+    """
+    pytest.importorskip("stable_baselines3")
+    pytest.importorskip("mlflow")
+
+    out_dir = str(tmp_path / "feature_store")
+    _write_fake_fold(out_dir, fold_id=0, split="train", window=30, n_rows=40, seed=1)
+    _write_fake_fold(out_dir, fold_id=0, split="valid", window=30, n_rows=10, seed=2)
+
+    cfg = {
+        "assets": ASSETS, "window": 30, "transaction_cost": 0.001,
+        "data": {"feature_store_dir": out_dir},
+        "model": {
+            "algorithm": "PPO", "policy": "MlpPolicy", "fold_id": 0,
+            "total_timesteps": 64, "n_steps": 32, "seed": 42,
+            "learning_rate": 1e-5, "target_kl": 0.02,  # ← 통로 검증 대상
+            "mlflow_tracking_uri": str(tmp_path / "mlruns"),
+            "mlflow_experiment": "test-tuning-knobs",
+            "model_dir": str(tmp_path / "models"),
+        },
+    }
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.dump(cfg), encoding="utf-8")
+
+    from mlflow.tracking import MlflowClient
+
+    from src.models.train import _to_tracking_uri, train
+
+    result = train(str(config_path))
+
+    client = MlflowClient(tracking_uri=_to_tracking_uri(str(tmp_path / "mlruns")))
+    params = client.get_run(result["run_id"]).data.params
+    assert float(params["learning_rate"]) == pytest.approx(1e-5)
+    assert float(params["target_kl"]) == pytest.approx(0.02)
+    # 지정하지 않은 값은 SB3 기본값을 쓰므로 기록되지 않는다(하위호환).
+    assert "ent_coef" not in params
