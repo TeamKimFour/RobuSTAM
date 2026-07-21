@@ -57,12 +57,23 @@ def main() -> None:
         return
 
     base = (os.environ.get("S3_PREFIX") or d.get("s3_prefix") or "").strip("/")
+
+    # precompute latest.json 상위 디렉토리 — precompute가 아직 안 돌면(파일 없음) 건너뛴다.
+    # 키 계약: {prefix}/precompute/latest.json (서빙측 src/inference/s3_fetch.py가 이 키를 받음).
+    precompute_dir = str(Path(d.get("precompute_path", "data/precompute/latest.json")).parent)
+
+    targets = [("raw", d["raw_dir"]), ("feature_store", d["feature_store_dir"])]
+    if Path(precompute_dir).is_dir():
+        targets.append(("precompute", precompute_dir))
+
     total = 0
-    for name, local_dir in (("raw", d["raw_dir"]), ("feature_store", d["feature_store_dir"])):
+    for name, local_dir in targets:
         prefix = f"{base}/{name}" if base else name
         keys = sync_dir_to_s3(local_dir, bucket, prefix)
         print(f"  {name}: {len(keys)}개 → s3://{bucket}/{prefix}/")
         total += len(keys)
+    if not Path(precompute_dir).is_dir():
+        print("  precompute: 디렉토리 없음 → skip (precompute 미실행 상태에서도 정상)")
     print(f"업로드 완료: 총 {total}개 파일")
 
 

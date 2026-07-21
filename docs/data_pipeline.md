@@ -66,8 +66,10 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
   valid/test는 적용만. 수익률 per_asset·지표 per_column·prev_weight 제외·std=0 가드. 통계 직렬화(`scaler_stats`).
 - **`build.py`** — 오케스트레이터. 수집→지표→조립→(fold별 train fit→transform)→적재 + `targets`.
   실행 `python -m src.data.build`.
-- **`s3_sync.py`** — 로컬 data(raw·feature_store)를 S3에 업로드(boto3). `meta.sqlite`도 파일로 업로드
-  (s3:// 직접쓰기 불가 회피). 버킷 미설정 시 skip. 실행 `python -m src.data.s3_sync`.
+- **`s3_sync.py`** — 로컬 data(raw·feature_store·**precompute**)를 S3에 업로드(boto3). `meta.sqlite`도
+  파일로 업로드(s3:// 직접쓰기 불가 회피). `latest.json`은 `{prefix}/precompute/latest.json` 키로
+  올려 서빙측(`src/inference/s3_fetch.py`)이 받는다 — precompute 미실행 시 그 디렉토리는 skip.
+  버킷 미설정 시 전체 skip. 실행 `python -m src.data.s3_sync`.
 - **`docker/Dockerfile.pipeline`** — collect·build 컨테이너 이미지(Python 3.12·핀 의존성).
 - **`.github/workflows/daily.yml`** — 매일 KST 07:00 cron: collect→build→**S3 업로드(활성)**.
   precompute(오늘의 비중, §8)는 모델 준비 후 추가. S3 연결은 2026-07-19 실연결 검증 완료(§7-2).
