@@ -11,9 +11,21 @@ pytest.importorskip("moto")
 import boto3
 from moto import mock_aws
 
-from src.data.s3_sync import sync_dir_to_s3
+from src.data.s3_sync import main, sync_dir_to_s3
 
 BUCKET = "robustam-test"
+
+
+def _fake_cfg(tmp_path, bucket: str = "") -> dict:
+    return {
+        "data": {
+            "raw_dir": str(tmp_path / "raw"),
+            "feature_store_dir": str(tmp_path / "feature_store"),
+            "precompute_path": str(tmp_path / "precompute" / "latest.json"),
+            "s3_bucket": bucket,
+            "s3_prefix": "robustam",
+        }
+    }
 
 
 def _make_local(tmp_path):
@@ -55,3 +67,47 @@ def test_sync_empty_prefix(tmp_path):
 def test_missing_dir_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         sync_dir_to_s3(str(tmp_path / "nope"), BUCKET, "x")
+
+
+# ── main() — precompute 업로드 대상 추가 (도현, PR #47 코멘트) ──
+@mock_aws
+def test_main_skips_missing_precompute_dir(tmp_path, monkeypatch, capsys):
+    """precompute가 한 번도 안 돈 환경(로컬 등) — 나머지는 올라가고 precompute만 skip, 예외 없음."""
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "raw" / "prices.parquet").write_bytes(b"x")
+    (tmp_path / "feature_store").mkdir()
+    (tmp_path / "feature_store" / "meta.sqlite").write_bytes(b"x")
+    # precompute 디렉토리는 만들지 않는다 — sync_dir_to_s3라면 FileNotFoundError.
+
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    monkeypatch.setenv("S3_BUCKET", BUCKET)
+    monkeypatch.setattr("src.config_loader.load_config", lambda: _fake_cfg(tmp_path))
+
+    main()  # 예외 없이 끝나야 한다
+
+    got = {o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET)["Contents"]}
+    assert "robustam/raw/prices.parquet" in got
+    assert "robustam/feature_store/meta.sqlite" in got
+    assert not any("precompute" in k for k in got)
+    assert "precompute" in capsys.readouterr().out
+
+
+@mock_aws
+def test_main_uploads_precompute_when_present(tmp_path, monkeypatch):
+    """precompute가 이미 돈 환경 — latest.json도 s3_fetch.py가 기대하는 키로 업로드된다(§8-2)."""
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "feature_store").mkdir()
+    (tmp_path / "precompute").mkdir()
+    (tmp_path / "precompute" / "latest.json").write_bytes(b'{"date": "2026-07-21"}')
+
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    monkeypatch.setenv("S3_BUCKET", BUCKET)
+    monkeypatch.setattr("src.config_loader.load_config", lambda: _fake_cfg(tmp_path))
+
+    main()
+
+    got = {o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET)["Contents"]}
+    # src/inference/s3_fetch.py의 계약 키(§8-2)와 정확히 일치해야 수신 쪽이 찾을 수 있다.
+    assert "robustam/precompute/latest.json" in got

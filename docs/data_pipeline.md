@@ -66,8 +66,9 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
   valid/test는 적용만. 수익률 per_asset·지표 per_column·prev_weight 제외·std=0 가드. 통계 직렬화(`scaler_stats`).
 - **`build.py`** — 오케스트레이터. 수집→지표→조립→(fold별 train fit→transform)→적재 + `targets`.
   실행 `python -m src.data.build`.
-- **`s3_sync.py`** — 로컬 data(raw·feature_store)를 S3에 업로드(boto3). `meta.sqlite`도 파일로 업로드
-  (s3:// 직접쓰기 불가 회피). 버킷 미설정 시 skip. 실행 `python -m src.data.s3_sync`.
+- **`s3_sync.py`** — 로컬 data(raw·feature_store·precompute)를 S3에 업로드(boto3). `meta.sqlite`도
+  파일로 업로드(s3:// 직접쓰기 불가 회피). precompute 디렉토리가 없으면(미실행 환경) skip하고
+  나머지는 계속 진행한다(§8-2 계약 키와 일치). 버킷 미설정 시 전체 skip. 실행 `python -m src.data.s3_sync`.
 - **`docker/Dockerfile.pipeline`** — collect·build 컨테이너 이미지(Python 3.12·핀 의존성).
 - **`.github/workflows/daily.yml`** — 매일 KST 07:00 cron: collect→build→policy.zip 수신→
   **precompute(활성, §8-2)**→S3 업로드. S3 연결은 2026-07-19 실연결 검증 완료(§7-2).
@@ -406,8 +407,8 @@ python -m src.models.publish download    # 서빙 환경 (CI·EC2) — precomput
 스스로 S3에서 내려받아야 한다.
 
 **S3 키 계약**: `s3://{data.s3_bucket}/{data.s3_prefix}/precompute/latest.json`
-(`src/data/s3_sync.py`가 쓰는 `raw`/`feature_store`와 동일한 prefix 규칙). 이 경로로
-업로드하는 쪽 구현은 민지 담당(`daily.yml` precompute 활성화와 함께).
+(`src/data/s3_sync.py`가 쓰는 `raw`/`feature_store`와 동일한 prefix 규칙). 이 경로 업로드는
+`s3_sync.py`가 함께 처리한다(아래 §8-3, 도현 PR #47 코멘트 반영).
 
 **수신 구현** — `src/inference/s3_fetch.py`:
 - 컨테이너 기동 시 1회 + 이후 `PRECOMPUTE_SYNC_INTERVAL_SEC`(기본 300초) 간격으로 반복 다운로드.
@@ -437,11 +438,15 @@ collect → build → AWS 자격증명(OIDC) → policy.zip 수신(publish downl
 > 배포된 policy의 valid 샤프가 **음수**(-0.13, 이슈 #34)라는 점은 변하지 않는다. 이 활성화는
 > "배선이 끝까지 도는가"를 확인하는 것이고, 결과값을 투자 판단에 쓰면 안 된다(config 주석 참고).
 
+**후속 수정(도현, PR #47 코멘트)**: 처음 활성화했을 때는 §8-3이 러너 안에 `latest.json`을
+만들어도 S3로 나가는 경로가 없어 **잡이 끝나면 그대로 증발**했다(`s3_sync.py`가 `raw`/
+`feature_store`만 업로드 대상으로 삼았기 때문 — #42의 503과 같은 뿌리). `s3_sync.py`의
+업로드 대상에 `precompute`(§8-2 키 계약과 동일 경로)를 추가해 해결했다. precompute가
+아직 한 번도 안 돈 환경(로컬 등)에서는 그 디렉토리만 skip하고 나머지는 계속 업로드한다
+(`sync_dir_to_s3`는 없는 디렉토리에 예외를 던지므로, 미리 걸러 raw·feature_store 업로드
+후 갑자기 실패하는 부분 실패를 막는다).
+
 ### 아직 정해지지 않은 것
-- **daily.yml에서 `latest.json`을 §8-2 S3 키로 업로드하는 부분** — 아직 미구현
-  (도현이 PR #47 코멘트로 지적: `s3_sync.py`가 `raw`/`feature_store`만 올리고 `precompute`는
-  대상에 없어, §8-3으로 precompute가 돌아도 산출물이 잡 종료와 함께 사라진다).
-  구현 전까지는 §8-2 수신 로직이 "S3에 키 없음"으로 매번 skip한다(정상 동작).
 - 배치 실패 시 이전 `latest.json` 유지 여부(현재는 원자적 덮어쓰기라 성공 시에만 교체).
 - 배포 policy 교체 시 이전 모델의 S3 보관 정책(버전 유지 기간·정리 주기).
 
@@ -465,3 +470,4 @@ collect → build → AWS 자격증명(OIDC) → policy.zip 수신(publish downl
 | v0.13 | 2026-07-20 | 이슈 #33: policy.zip S3 반출 구현(`src/models/publish.py`). 키는 파일명 보존(`<prefix>/models/<name>.zip`)이라 `config.inference.model_path`(로컬 경로) 스키마 변경 불필요 — S3 키를 basename에서 유도한다. §8-1 반출 방법을 수동 전송에서 `publish upload`/`download`로 교체. |
 | v0.14 | 2026-07-20 | §8-2 추가: 프로덕션 서빙 컨테이너의 `latest.json` S3 수신 계약·구현(`src/inference/s3_fetch.py`, `docker/api_entrypoint.sh`). PR #42 코멘트(민지) 논의에서 옵션 (b) "컨테이너가 주기적으로 S3에서 받아오기"로 결정. 업로드 측(daily.yml)은 민지 담당으로 남아 있음. |
 | v0.15 | 2026-07-20 | §8-3 신설(구 §8-2, PR #42 merge로 번호 겹쳐 재배치): `daily.yml`에 `publish download`·precompute 스텝 활성화(AWS 인증 뒤, S3 업로드 앞). `config.inference`가 채워지고 S3에 실제 policy.zip이 올라간 것을 확인 후 진행. 두 스텝 모두 `vars.AWS_ROLE_ARN` 조건으로 gate해 AWS 미설정 환경에서도 collect→build는 정상 종료되게 함. |
+| v0.16 | 2026-07-21 | 도현 PR #47 코멘트 반영: `s3_sync.py` 업로드 대상에 `precompute` 추가 — §8-3으로 활성화된 precompute 산출물이 잡 종료와 함께 사라지던 문제(§8-2 503과 동일 근본원인)를 해결. 디렉토리 없으면 skip하는 가드 포함(로컬 등 precompute 미실행 환경에서 raw·feature_store 업로드가 부분 실패로 깨지지 않도록). |
