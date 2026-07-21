@@ -6,18 +6,25 @@ const CHANGES = [
   { name: "SHV", pct: -0.5, color: "#a5b4fc" },
 ];
 
-// 스케일: |pct| = 4% 를 100%로 정규화
+// 스케일: |pct| = 4% 를 반쪽(50%) 폭으로 정규화 → 최대 폭도 100%(양쪽 합) 넘지 않음
 const SCALE = 4;
 
 export default function DailyChangeCard() {
   return (
-    <section className="card">
+    <section
+      className="card"
+      style={{
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
       <h2 className="card-title">전일 대비 변동성</h2>
-      <div>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "space-around" }}>
         {CHANGES.map((c) => {
           const positive = c.pct >= 0;
           const barColor = positive ? c.color : "#dc2626";
-          const width = Math.min(Math.abs(c.pct) / SCALE, 1) * 100;
+          const halfWidth = Math.min(Math.abs(c.pct) / SCALE, 1) * 50;
           return (
             <div
               key={c.name}
@@ -39,15 +46,31 @@ export default function DailyChangeCard() {
                   overflow: "hidden",
                 }}
               >
+                {/* 중앙 0선 */}
                 <div
                   style={{
                     position: "absolute",
-                    left: positive ? 0 : "auto",
-                    right: positive ? "auto" : 0,
-                    width: `${width}%`,
-                    height: "100%",
+                    left: "50%",
+                    top: 0,
+                    bottom: 0,
+                    width: 1,
+                    background: "var(--border)",
+                    transform: "translateX(-0.5px)",
+                    zIndex: 1,
+                  }}
+                />
+                {/* 값 막대: 중앙에서 좌/우로 뻗음 */}
+                <div
+                  style={{
+                    position: "absolute",
+                    left: positive ? "50%" : `${50 - halfWidth}%`,
+                    width: `${halfWidth}%`,
+                    top: 0,
+                    bottom: 0,
                     background: barColor,
-                    borderRadius: 6,
+                    borderRadius: positive
+                      ? "0 6px 6px 0"
+                      : "6px 0 0 6px",
                   }}
                 />
               </div>
@@ -68,13 +91,16 @@ export default function DailyChangeCard() {
       </div>
       <div
         style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
           marginTop: 12,
-          textAlign: "right",
           fontSize: 11,
           color: "var(--sub)",
         }}
       >
-        최근 업데이트: 오전 09:15 (KST)
+        <span>-{SCALE}% ← 0 → +{SCALE}%</span>
+        <span>최근 업데이트: 오전 09:15 (KST)</span>
       </div>
     </section>
   );
