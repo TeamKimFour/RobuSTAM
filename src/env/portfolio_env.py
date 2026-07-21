@@ -61,6 +61,11 @@ class PortfolioEnv(gym.Env):
     returns_df : 익일 로그수익률 (`src.data.feature_store.load_targets` 출력).
         컬럼 = `fwd_ret_<asset>` 순서, index = state_df와 동일.
     cfg : config.yaml 사전. 생략 시 기본 경로에서 로드한다.
+    cost_multiplier : 보상 계산에만 곱하는 거래비용 가중치 λ (기본 1.0 = 실비용 그대로).
+        **학습 전용 셰이핑 장치**다(이슈 #34 개선안 A). 1.0이 아닌 값은 학습 env에서만 쓰고,
+        평가·백테스트는 반드시 1.0(=`config.transaction_cost` 원값)을 유지해야 한다 —
+        CLAUDE.md §2의 "편도 0.1%" 원칙은 성과 측정 축에 대한 것이므로, 여기를 건드리면
+        벤치마크와 다른 자로 재는 셈이 된다.
     """
 
     metadata = {"render_modes": []}
@@ -70,6 +75,7 @@ class PortfolioEnv(gym.Env):
         state_df: pd.DataFrame,
         returns_df: pd.DataFrame,
         cfg: dict | None = None,
+        cost_multiplier: float = 1.0,
     ) -> None:
         super().__init__()
         self.cfg = cfg if cfg is not None else load_config()
@@ -77,7 +83,12 @@ class PortfolioEnv(gym.Env):
         self.assets = get_assets(self.cfg)
         self.n_assets = len(self.assets)
         self.state_dim = get_state_dim(self.cfg)
-        self.c = get_transaction_cost(self.cfg)
+        if cost_multiplier <= 0:
+            raise ValueError(f"cost_multiplier는 양수여야 합니다: {cost_multiplier}")
+        self.cost_multiplier = float(cost_multiplier)
+        # 실비용 c_real은 그대로 보존하고, 보상에 쓰는 비율만 λ배 한다.
+        self.c_real = get_transaction_cost(self.cfg)
+        self.c = self.c_real * self.cost_multiplier
 
         expected_state_cols = schema.feature_names(self.W)
         if list(state_df.columns) != expected_state_cols:
@@ -167,11 +178,15 @@ class PortfolioEnv(gym.Env):
         self._t += 1
 
         terminated = self._t >= len(self._state) - 1
+        # info["cost"]는 항상 **실비용**(c_real × turnover)을 보고한다 — λ를 걸어도 진단·집계가
+        # 실제로 나간 돈을 가리키게 하기 위함이다. 보상에 반영된 셰이핑 비용은 따로 노출한다.
+        # (λ=1이면 둘이 같으므로 기존 호출부 동작은 그대로다.)
         info = {
             "portfolio_return": detail["portfolio_return"],
             "log_return": detail["log_return"],
             "turnover": detail["turnover"],
-            "cost": detail["transaction_cost"],
+            "cost": detail["turnover"] * self.c_real,
+            "shaped_cost": detail["transaction_cost"],
             "weights": w_new.astype(np.float32).copy(),
         }
         return self._obs(), reward, terminated, False, info
