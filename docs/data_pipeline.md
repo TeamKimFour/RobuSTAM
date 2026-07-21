@@ -399,9 +399,29 @@ python -m src.models.publish download    # 서빙 환경 (CI·EC2) — precomput
 > **수동 대안(RunPod)**: `runpodctl send <파일>` → 로컬에서 `runpodctl receive <코드>`.
 > 컨테이너 디스크는 파드를 Stop/Terminate하면 삭제되므로 **끄기 전에** 받아야 한다.
 
+### 8-2. 서빙 컨테이너의 latest.json 수신 — S3 polling (PR #42 논의, 옵션 b)
+
+프로덕션 `docker-compose.prod.yml`의 `fastapi` 컨테이너는 호스트와 데이터 볼륨을 공유하지
+않는 stateless 구조다. `daily.yml` 배치(민지 담당)가 만든 `latest.json`을 받으려면 컨테이너가
+스스로 S3에서 내려받아야 한다.
+
+**S3 키 계약**: `s3://{data.s3_bucket}/{data.s3_prefix}/precompute/latest.json`
+(`src/data/s3_sync.py`가 쓰는 `raw`/`feature_store`와 동일한 prefix 규칙). 이 경로로
+업로드하는 쪽 구현은 민지 담당(`daily.yml` precompute 활성화와 함께).
+
+**수신 구현** — `src/inference/s3_fetch.py`:
+- 컨테이너 기동 시 1회 + 이후 `PRECOMPUTE_SYNC_INTERVAL_SEC`(기본 300초) 간격으로 반복 다운로드.
+- `docker/api_entrypoint.sh`가 `PRECOMPUTE_S3_SYNC=true`일 때만 백그라운드로 띄운다 — 로컬
+  `docker-compose.yml`(개발용)은 이 값이 없어 영향 없음.
+- 버킷 미설정·키 없음·네트워크 오류는 모두 조용히 skip한다(예외를 던지지 않음). `src/api/main.py`가
+  파일 없음을 이미 503으로 정상 처리하므로, 초기 배포 시점(S3에 아직 아무것도 없을 때)에도
+  컨테이너가 죽지 않는다.
+
 ### 아직 정해지지 않은 것
 - daily.yml precompute 스텝 활성 시점 — 도현 실제 policy.zip + `inference` 값 확정 후(§작업④).
   `publish download` → `precompute` 순서로 붙이면 된다.
+- **daily.yml에서 `latest.json`을 §8-2 S3 키로 업로드하는 부분** — 민지 담당, 아직 미구현.
+  구현 전까지는 §8-2 수신 로직이 "S3에 키 없음"으로 매번 skip한다(정상 동작).
 - 배치 실패 시 이전 `latest.json` 유지 여부(현재는 원자적 덮어쓰기라 성공 시에만 교체).
 - 배포 policy 교체 시 이전 모델의 S3 보관 정책(버전 유지 기간·정리 주기).
 
@@ -423,3 +443,4 @@ python -m src.models.publish download    # 서빙 환경 (CI·EC2) — precomput
 | v0.11 | 2026-07-19 | `config_hash` 범위를 `features`·`normalize`·`split`까지 확대(PR #36 후속). 자동 run 해석의 유일한 안전장치이므로 통계 값을 바꾸는 설정을 모두 포함해 비호환 build를 조용히 선택하지 못하게 한다. `data.start/end`·`transaction_cost`는 통계 불변이라 의도적으로 제외. 기존 run_id는 재빌드 후 자동 회복. |
 | v0.12 | 2026-07-19 | §7-2 추가: S3 실연결 검증 기록(daily.yml 수동 트리거로 OIDC 인증·업로드 20개 파일 확인). §1 표·§3·README의 "AWS 세팅 후 활성" 표기를 활성 완료로 정정. (§7-1 수집 신뢰성은 PR #37에서 추가됐으나 머지 중 이력 항목이 누락돼 여기 함께 기록한다.) |
 | v0.13 | 2026-07-20 | 이슈 #33: policy.zip S3 반출 구현(`src/models/publish.py`). 키는 파일명 보존(`<prefix>/models/<name>.zip`)이라 `config.inference.model_path`(로컬 경로) 스키마 변경 불필요 — S3 키를 basename에서 유도한다. §8-1 반출 방법을 수동 전송에서 `publish upload`/`download`로 교체. |
+| v0.14 | 2026-07-20 | §8-2 추가: 프로덕션 서빙 컨테이너의 `latest.json` S3 수신 계약·구현(`src/inference/s3_fetch.py`, `docker/api_entrypoint.sh`). PR #42 코멘트(민지) 논의에서 옵션 (b) "컨테이너가 주기적으로 S3에서 받아오기"로 결정. 업로드 측(daily.yml)은 민지 담당으로 남아 있음. |
