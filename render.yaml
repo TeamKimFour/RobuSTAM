@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: robustam-api
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: docker/Dockerfile.api
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: ENV
+        value: production
+      - key: PRECOMPUTE_S3_SYNC
+        value: "true"
+      - key: S3_BUCKET
+        value: robustam-teamkimfour
+      - key: S3_PREFIX
+        value: robustam
+      - key: PRECOMPUTE_SYNC_INTERVAL_SEC
+        value: "300"
+      - key: AWS_DEFAULT_REGION
+        value: ap-northeast-2
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
