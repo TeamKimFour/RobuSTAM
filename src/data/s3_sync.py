@@ -10,6 +10,17 @@ config `data.s3_bucket`이 비어 있으면 업로드를 건너뛴다(로컬 개
 from pathlib import Path
 
 
+def _precompute_upload_dir(precompute_path: str) -> str:
+    """precompute_path의 부모 디렉토리 문자열을 반환한다.
+
+    디렉토리 구성요소가 없으면(예: "latest.json") `Path(...).parent`가 `"."`(cwd)이 되어,
+    그대로 쓰면 작업 디렉토리 전체(`.git/`·소스코드 포함)가 통째로 업로드된다. 그런 경우
+    빈 문자열을 돌려줘 호출자가 안전하게 skip하게 한다.
+    """
+    parent = Path(precompute_path).parent
+    return "" if str(parent) in ("", ".") else str(parent)
+
+
 def sync_dir_to_s3(
     local_dir: str,
     bucket: str,
@@ -57,7 +68,7 @@ def main() -> None:
     """
     import os
 
-    from src.config_loader import load_config
+    from src.config_loader import get_precompute_path, load_config
 
     cfg = load_config()
     d = cfg["data"]
@@ -70,10 +81,15 @@ def main() -> None:
     targets = [
         ("raw", d["raw_dir"]),
         ("feature_store", d["feature_store_dir"]),
-        ("precompute", str(Path(d["precompute_path"]).parent)),  # 익일 추천 비중 — 서빙이 소비(§8-2)
+        # 익일 추천 비중 — 서빙이 소비(§8-2). get_precompute_path()로 읽어 다른 소비자
+        # (precompute.py·s3_fetch.py·api/main.py)와 같은 config 접근 통로를 쓴다.
+        ("precompute", _precompute_upload_dir(get_precompute_path(cfg))),
     ]
     total = 0
     for name, local_dir in targets:
+        if not local_dir:
+            print(f"  {name}: 업로드 경로 없음(설정에 디렉토리 구성요소 없음) → skip")
+            continue
         if not Path(local_dir).is_dir():
             print(f"  {name}: 디렉토리 없음({local_dir}) → skip")
             continue

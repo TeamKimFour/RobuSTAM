@@ -11,7 +11,7 @@ pytest.importorskip("moto")
 import boto3
 from moto import mock_aws
 
-from src.data.s3_sync import main, sync_dir_to_s3
+from src.data.s3_sync import _precompute_upload_dir, main, sync_dir_to_s3
 
 BUCKET = "robustam-test"
 
@@ -129,3 +129,40 @@ def test_main_uploads_precompute_when_present(tmp_path, monkeypatch):
     got = {o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET)["Contents"]}
     # src/inference/s3_fetch.py의 계약 키(§8-2)와 정확히 일치해야 수신 쪽이 찾을 수 있다.
     assert "robustam/precompute/latest.json" in got
+
+
+# ── _precompute_upload_dir() — cwd 전체 업로드 방지 가드 (셀프리뷰 발견) ──
+def test_precompute_upload_dir_normal_path():
+    from pathlib import Path
+
+    assert _precompute_upload_dir("data/precompute/latest.json") == str(Path("data/precompute"))
+
+
+def test_precompute_upload_dir_bare_filename_returns_empty():
+    """디렉토리 구성요소가 없으면 Path(...).parent가 cwd(".")가 된다 — 빈 문자열로 막는다."""
+    assert _precompute_upload_dir("latest.json") == ""
+
+
+@mock_aws
+def test_main_skips_precompute_when_path_has_no_directory(tmp_path, monkeypatch, capsys):
+    """precompute_path가 디렉토리 없는 값(오설정)이어도 cwd를 통째로 올리지 않고 skip한다."""
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "raw" / "prices.parquet").write_bytes(b"x")
+    (tmp_path / "feature_store").mkdir()
+    (tmp_path / "feature_store" / "meta.sqlite").write_bytes(b"x")
+
+    cfg = _fake_cfg(tmp_path)
+    cfg["data"]["precompute_path"] = "latest.json"  # 디렉토리 없는 값
+
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    monkeypatch.setenv("S3_BUCKET", BUCKET)
+    monkeypatch.setattr("src.config_loader.load_config", lambda: cfg)
+
+    main()
+
+    got = {o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET)["Contents"]}
+    assert "robustam/raw/prices.parquet" in got
+    assert "robustam/feature_store/meta.sqlite" in got
+    assert not any("precompute" in k for k in got)
+    assert "업로드 경로 없음" in capsys.readouterr().out

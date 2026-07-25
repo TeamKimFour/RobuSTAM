@@ -458,6 +458,15 @@ collect → build → AWS 자격증명(OIDC) → policy.zip 수신(publish downl
 `*.tmp` 잔여물이 업로드될 수 있어, `sync_dir_to_s3`가 `.tmp` 확장자 파일을 업로드 대상에서
 제외하도록 했다(raw·feature_store에도 공통 적용되는 일반적인 방어).
 
+**후속 수정 4(셀프리뷰)**: `s3_sync.py`가 `data.precompute_path`를 `d["precompute_path"]`로
+직접 읽어, 같은 키를 쓰는 다른 소비자(`precompute.py`·`s3_fetch.py`·`api/main.py`)가 전부
+쓰는 `config_loader.get_precompute_path()`(키 없으면 기본값 폴백)와 접근 통로가 어긋나
+있었다. 더 심각하게는, 그 값에 디렉토리 구성요소가 없으면(예: `"latest.json"`)
+`Path(...).parent`가 `"."`(cwd)이 되어 **작업 디렉토리 전체(`.git/` 포함)가 그대로
+S3에 업로드될 수 있는** 검증되지 않은 경로였다. `get_precompute_path()`로 통일하고,
+`_precompute_upload_dir()` 가드가 그런 값을 만나면 빈 문자열을 돌려줘 `precompute` 타깃만
+안전하게 skip하도록(다른 두 타깃은 계속 업로드) 수정했다.
+
 ### 아직 정해지지 않은 것
 - 배치 실패 시 이전 `latest.json` 유지 여부(현재는 원자적 덮어쓰기라 성공 시에만 교체).
 - 배포 policy 교체 시 이전 모델의 S3 보관 정책(버전 유지 기간·정리 주기).
@@ -487,3 +496,4 @@ collect → build → AWS 자격증명(OIDC) → policy.zip 수신(publish downl
 | v0.15 | 2026-07-20 | §8-3 신설(구 §8-2, PR #42 merge로 번호 겹쳐 재배치): `daily.yml`에 `publish download`·precompute 스텝 활성화(AWS 인증 뒤, S3 업로드 앞). `config.inference`가 채워지고 S3에 실제 policy.zip이 올라간 것을 확인 후 진행. 두 스텝 모두 `vars.AWS_ROLE_ARN` 조건으로 gate해 AWS 미설정 환경에서도 collect→build는 정상 종료되게 함. |
 | v0.16 | 2026-07-21 | 도현 PR #47 코멘트 반영: `s3_sync.py` 업로드 대상에 `precompute` 추가 — §8-3으로 활성화된 precompute 산출물이 잡 종료와 함께 사라지던 문제(§8-2 503과 동일 근본원인)를 해결. 디렉토리 없으면 skip하는 가드 포함(로컬 등 precompute 미실행 환경에서 raw·feature_store 업로드가 부분 실패로 깨지지 않도록). |
 | v0.17 | 2026-07-25 | 도현 정식 리뷰(PR #47) 반영: `policy.zip 수신`·`precompute` 스텝에 `continue-on-error: true` 추가 — 실패해도 뒤의 `S3 업로드`(raw·feature_store)가 계속 돌도록 데이터 갱신과 모델 추론 성공을 분리. `sync_dir_to_s3`가 `*.tmp` 잔여물을 업로드 대상에서 제외하도록 방어 추가. gate 조건이 버킷 미확인이라는 지적은 경미로 판단해 후속으로 미룸. |
+| v0.18 | 2026-07-25 | 셀프리뷰로 발견: `s3_sync.py`가 `data.precompute_path`를 `d["precompute_path"]`로 직접 읽어 다른 소비자(precompute.py·s3_fetch.py·api/main.py)와 다른 config 접근 통로를 썼고, 그 값에 디렉토리 구성요소가 없으면(`Path(...).parent`가 cwd) 작업 디렉토리 전체가 업로드될 수 있었다. `get_precompute_path()`로 통일하고, `_precompute_upload_dir()` 가드로 그런 경우 빈 문자열을 돌려줘 안전하게 skip하도록 수정. |
