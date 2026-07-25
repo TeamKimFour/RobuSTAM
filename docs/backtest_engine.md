@@ -12,7 +12,8 @@
 |---|---|---|
 | NAV 갱신 및 수수료 차감 | `src/backtest/engine.py` | ✅ 구현 |
 | 멀티 벤치마크 (1/N · 60:40 · B&H) | `src/backtest/benchmark.py` | ✅ 구현 |
-| walk-forward 백테스트 루프 | `src/backtest/runner.py` | ⏳ 3주차 |
+| 정책→백테스트 어댑터 | `src/backtest/policy.py` | ✅ 구현 (PR #43) |
+| walk-forward 백테스트 루프 | `src/backtest/runner.py` | ✅ 구현 (§4-3) |
 | 결과 저장 (S3) | `src/backtest/s3_results.py` | ✅ 구현 |
 | 결과 저장 (DB 연동) | `src/backtest/engine.py` | ⏳ 도현과 협의 후 |
 
@@ -150,6 +151,63 @@ IAM Role을 쓰는 게 더 안전하다(이 경우 `.env` 값은 무시되고 Ro
 
 ---
 
+## 4-3. Walk-forward 백테스트 루프 (`src/backtest/runner.py`)
+
+`config.split`(§4-1, anchor 2010·test_blocks 3개·embargo_days 34)이 정의하는 fold마다
+policy(`policy.py`)와 벤치마크 3종(`benchmark.py`)을 같은 기간에 대해 계산하고, CLAUDE.md
+§1 판정 기준으로 비교한 뒤 넷 다 S3에 저장한다.
+
+```
+fold_id ∈ {1..len(config.split.test_blocks)}  (1부터, splits.py 관례)
+    │
+    ├─ policy.run_policy_on_fold()      → RL policy NAV
+    ├─ benchmark.run_equal_weight()     → 1/N NAV
+    ├─ benchmark.run_sixty_forty()      → 60:40 NAV
+    └─ benchmark.run_buy_and_hold()     → B&H NAV
+         │  (넷 다 policy.summarize()로 지표화)
+         ├─ s3_results.save_results_to_s3()  ×4  (아래 run_id 규칙)
+         └─ 콘솔 리포트 (전략별 지표 + 벤치마크 대비 판정)
+```
+
+### S3 저장 단위 — fold당 4개 run (팀 확정)
+`save_results_to_s3()`는 수정하지 않고 그대로 4번 호출한다. **전략 하나 = run 하나**로
+저장하며, run_id는 다음 규칙을 따른다:
+
+| 전략 | run_id | 예시(fold1) |
+|---|---|---|
+| RL policy | `fold{N}_policy` | `fold1_policy` |
+| 1/N | `fold{N}_1n` | `fold1_1n` |
+| 60:40 | `fold{N}_60_40` | `fold1_60_40` |
+| B&H | `fold{N}_bh` | `fold1_bh` |
+
+이전(2주차)엔 이 규칙이 없어 스모크 테스트 run(`20260713_smoke-test`) 1건만 S3에 존재했다
+— 실제 벤치마크 3종을 저장한 선례는 없었다. 지금부터는 fold마다 4개 run이 쌓인다.
+
+### CLAUDE.md §1 판정 — 샤프 15%+ 개선 또는 MDD 20%+ 방어
+벤치마크 대비 다음 중 **하나라도** 만족하면 `beats_target=True`:
+```
+sharpe_improvement_pct = (policy.sharpe - benchmark.sharpe) / |benchmark.sharpe|   ≥ 0.15
+mdd_defense_pct        = (|benchmark.mdd| - |policy.mdd|) / |benchmark.mdd|        ≥ 0.20
+```
+분모가 0이면(벤치마크 샤프·MDD가 정확히 0) `nan`으로 두고 `beats_target=False` 처리한다
+(0으로 나누기 방지 — 판정 불능을 "달성"으로 오판하지 않도록).
+
+### 결과 딕셔너리 — 이슈 #46 확장 여지
+`run_fold()`가 반환하는 `strategies`/`comparison`의 값은 `policy.summarize()`가 만드는
+순수 dict를 그대로 옮긴 것이다. 이슈 #46(비중편차·회전율 판정 기준)이 팀 합의되면
+`summarize()`가 반환하는 dict에 키만 추가하면 되고, `runner.py`·저장·출력 로직은 손댈
+필요가 없다 — 지금은 일부러 그 키를 넣지 않았다.
+
+### CLI
+`policy.py`의 `--fold-id`/`--split`/`--model-path`/`--initial-nav` 패턴을 그대로 따른다.
+`--fold-id`를 생략하면 `config.split.test_blocks` 개수만큼 전체 fold를 순회한다.
+```bash
+python -m src.backtest.runner                 # test split, 전체 fold
+python -m src.backtest.runner --fold-id 2      # fold2만
+```
+
+---
+
 ## 5. 설계 결정
 
 ### 5-1. 거래비용률 — config.yaml 단일 출처
@@ -186,3 +244,4 @@ IAM Role을 쓰는 게 더 안전하다(이 경우 `.env` 값은 무시되고 Ro
 | v0.2 | 2026-07-08 | 리밸런싱 시점을 end-of-day → start-of-day로 변경, env와 관점 통일. 완전 리밸런싱(드리프트 무시) 가정 명시. |
 | v0.3 | 2026-07-11 | `benchmark.py`(1/N·60:40·B&H) 구현 반영. 60:40 그룹 내부 균등분배 확정, B&H 실제 드리프트 계산 로직 명시. |
 | v0.4 | 2026-07-13 | `s3_results.py`(백테스트 결과 S3 저장) 구현 반영. `BacktestEngine.save_results()` 추가, 버킷은 `data.s3_bucket` 재사용. |
+| v0.5 | 2026-07-21 | §4-3 추가: `runner.py`(walk-forward 루프) 구현. fold당 policy+벤치마크 3종을 `fold{N}_{policy,1n,60_40,bh}` run_id로 각각 별도 저장(팀 확정). CLAUDE.md §1 판정(샤프 15%+ 개선 또는 MDD 20%+ 방어) 로직 추가. 이슈 #46 지표는 `summarize()` 확장으로 나중에 추가 가능하도록 결과 dict 구조만 열어둠. `policy.py`(PR #43, 어댑터) 누락돼 있던 상태표 행도 함께 보강. |
