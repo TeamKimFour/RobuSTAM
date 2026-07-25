@@ -69,6 +69,24 @@ def test_missing_dir_raises(tmp_path):
         sync_dir_to_s3(str(tmp_path / "nope"), BUCKET, "x")
 
 
+@mock_aws
+def test_sync_excludes_tmp_files(tmp_path):
+    """원자적 쓰기(tmp→rename) 중 죽으면 남는 *.tmp 잔여물은 업로드 대상에서 제외한다(도현 리뷰)."""
+    root = tmp_path / "precompute"
+    root.mkdir()
+    (root / "latest.json").write_bytes(b'{"date": "2026-07-24"}')
+    (root / "abc123.tmp").write_bytes(b"partial-write")  # _atomic_write_json의 잔여물 시뮬레이션
+
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+
+    keys = sync_dir_to_s3(str(root), BUCKET, "robustam/precompute")
+
+    assert keys == ["robustam/precompute/latest.json"]
+    got = {o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET)["Contents"]}
+    assert got == {"robustam/precompute/latest.json"}
+
+
 # ── main() — precompute 업로드 대상 추가 (도현, PR #47 코멘트) ──
 @mock_aws
 def test_main_skips_missing_precompute_dir(tmp_path, monkeypatch, capsys):

@@ -438,7 +438,7 @@ collect → build → AWS 자격증명(OIDC) → policy.zip 수신(publish downl
 > 배포된 policy의 valid 샤프가 **음수**(-0.13, 이슈 #34)라는 점은 변하지 않는다. 이 활성화는
 > "배선이 끝까지 도는가"를 확인하는 것이고, 결과값을 투자 판단에 쓰면 안 된다(config 주석 참고).
 
-**후속 수정(도현, PR #47 코멘트)**: 처음 활성화했을 때는 §8-3이 러너 안에 `latest.json`을
+**후속 수정 1(도현, PR #47 코멘트)**: 처음 활성화했을 때는 §8-3이 러너 안에 `latest.json`을
 만들어도 S3로 나가는 경로가 없어 **잡이 끝나면 그대로 증발**했다(`s3_sync.py`가 `raw`/
 `feature_store`만 업로드 대상으로 삼았기 때문 — #42의 503과 같은 뿌리). `s3_sync.py`의
 업로드 대상에 `precompute`(§8-2 키 계약과 동일 경로)를 추가해 해결했다. precompute가
@@ -446,9 +446,24 @@ collect → build → AWS 자격증명(OIDC) → policy.zip 수신(publish downl
 (`sync_dir_to_s3`는 없는 디렉토리에 예외를 던지므로, 미리 걸러 raw·feature_store 업로드
 후 갑자기 실패하는 부분 실패를 막는다).
 
+**후속 수정 2(도현 정식 리뷰, PR #47)**: `policy.zip 수신`·`precompute` 둘 다 `if:` 조건만
+있고 `always()`가 없어서, 실패 시(깨진 policy, `PPO.load`/`predict` 에러 등) GitHub Actions
+기본 규칙상 **뒤의 `S3 업로드` 스텝까지 실행되지 않는다** — "데이터 갱신 심장박동"이 모델
+추론 성공에 묶여버리는 문제. 이슈 #34로 배포 policy 신뢰도가 낮은 지금 실제로 걸릴 수 있어,
+두 스텝에 `continue-on-error: true`를 추가해 실패해도 뒤의 `S3 업로드`(raw·feature_store)는
+항상 돌게 분리했다. `latest.json`은 precompute가 실제로 성공했을 때만 만들어지므로 §8-2
+서빙 계약에는 영향 없다.
+
+**후속 수정 3(도현 정식 리뷰, 경미)**: `precompute._atomic_write_json`이 쓰다 죽으면 남는
+`*.tmp` 잔여물이 업로드될 수 있어, `sync_dir_to_s3`가 `.tmp` 확장자 파일을 업로드 대상에서
+제외하도록 했다(raw·feature_store에도 공통 적용되는 일반적인 방어).
+
 ### 아직 정해지지 않은 것
 - 배치 실패 시 이전 `latest.json` 유지 여부(현재는 원자적 덮어쓰기라 성공 시에만 교체).
 - 배포 policy 교체 시 이전 모델의 S3 보관 정책(버전 유지 기간·정리 주기).
+- gate 조건이 `vars.AWS_ROLE_ARN`뿐이라 `S3_BUCKET`이 비면 `publish download`가
+  `SystemExit`로 잡을 실패시킨다(도현 리뷰, 경미 — config 기본 버킷이 있어 실사용엔
+  무해하나 gate 기준과 실제 의존성이 미묘하게 어긋남. 후속으로 미룸).
 
 ---
 
@@ -471,3 +486,4 @@ collect → build → AWS 자격증명(OIDC) → policy.zip 수신(publish downl
 | v0.14 | 2026-07-20 | §8-2 추가: 프로덕션 서빙 컨테이너의 `latest.json` S3 수신 계약·구현(`src/inference/s3_fetch.py`, `docker/api_entrypoint.sh`). PR #42 코멘트(민지) 논의에서 옵션 (b) "컨테이너가 주기적으로 S3에서 받아오기"로 결정. 업로드 측(daily.yml)은 민지 담당으로 남아 있음. |
 | v0.15 | 2026-07-20 | §8-3 신설(구 §8-2, PR #42 merge로 번호 겹쳐 재배치): `daily.yml`에 `publish download`·precompute 스텝 활성화(AWS 인증 뒤, S3 업로드 앞). `config.inference`가 채워지고 S3에 실제 policy.zip이 올라간 것을 확인 후 진행. 두 스텝 모두 `vars.AWS_ROLE_ARN` 조건으로 gate해 AWS 미설정 환경에서도 collect→build는 정상 종료되게 함. |
 | v0.16 | 2026-07-21 | 도현 PR #47 코멘트 반영: `s3_sync.py` 업로드 대상에 `precompute` 추가 — §8-3으로 활성화된 precompute 산출물이 잡 종료와 함께 사라지던 문제(§8-2 503과 동일 근본원인)를 해결. 디렉토리 없으면 skip하는 가드 포함(로컬 등 precompute 미실행 환경에서 raw·feature_store 업로드가 부분 실패로 깨지지 않도록). |
+| v0.17 | 2026-07-25 | 도현 정식 리뷰(PR #47) 반영: `policy.zip 수신`·`precompute` 스텝에 `continue-on-error: true` 추가 — 실패해도 뒤의 `S3 업로드`(raw·feature_store)가 계속 돌도록 데이터 갱신과 모델 추론 성공을 분리. `sync_dir_to_s3`가 `*.tmp` 잔여물을 업로드 대상에서 제외하도록 방어 추가. gate 조건이 버킷 미확인이라는 지적은 경미로 판단해 후속으로 미룸. |

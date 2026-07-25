@@ -33,6 +33,10 @@ def sync_dir_to_s3(
     for path in sorted(local.rglob("*")):
         if not path.is_file():
             continue
+        if path.suffix == ".tmp":
+            # 원자적 쓰기(tmp→rename) 중 죽으면 남는 잔여 파일 — 정상 산출물이 아니므로 제외
+            # (도현 리뷰, PR #47: precompute._atomic_write_json의 *.tmp가 올라갈 수 있다는 지적).
+            continue
         rel = path.relative_to(local).as_posix()
         key = f"{prefix}/{rel}" if prefix else rel
         s3.upload_file(str(path), bucket, key)
