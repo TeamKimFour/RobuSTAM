@@ -10,6 +10,17 @@ config `data.s3_bucket`이 비어 있으면 업로드를 건너뛴다(로컬 개
 from pathlib import Path
 
 
+def _precompute_upload_dir(precompute_path: str) -> str:
+    """precompute_path의 부모 디렉토리 문자열을 반환한다.
+
+    디렉토리 구성요소가 없으면(예: "latest.json") `Path(...).parent`가 `"."`(cwd)이 되어,
+    그대로 쓰면 작업 디렉토리 전체(`.git/`·소스코드 포함)가 통째로 업로드된다. 그런 경우
+    빈 문자열을 돌려줘 호출자가 안전하게 skip하게 한다.
+    """
+    parent = Path(precompute_path).parent
+    return "" if str(parent) in ("", ".") else str(parent)
+
+
 def sync_dir_to_s3(
     local_dir: str,
     bucket: str,
@@ -33,6 +44,10 @@ def sync_dir_to_s3(
     for path in sorted(local.rglob("*")):
         if not path.is_file():
             continue
+        if path.suffix == ".tmp":
+            # 원자적 쓰기(tmp→rename) 중 죽으면 남는 잔여 파일 — 정상 산출물이 아니므로 제외
+            # (도현 리뷰, PR #47: precompute._atomic_write_json의 *.tmp가 올라갈 수 있다는 지적).
+            continue
         rel = path.relative_to(local).as_posix()
         key = f"{prefix}/{rel}" if prefix else rel
         s3.upload_file(str(path), bucket, key)
@@ -41,13 +56,19 @@ def sync_dir_to_s3(
 
 
 def main() -> None:
-    """config 기반 업로드 — raw + feature_store 디렉토리를 S3에 올린다.
+    """config 기반 업로드 — raw·feature_store·precompute 디렉토리를 S3에 올린다.
 
     버킷·프리픽스는 환경변수(`S3_BUCKET`/`S3_PREFIX`)로 override 가능(CI에서 GH vars 주입).
+
+    precompute(`data.precompute_path`의 부모 디렉토리)는 아직 한 번도 안 돌았을 수 있다
+    (로컬, 또는 daily.yml에서 이 스텝보다 먼저 도는 게 아직 없던 환경). `sync_dir_to_s3`는
+    없는 디렉토리에 예외를 던지므로, 여기서 먼저 존재를 확인해 skip한다 — 그렇지 않으면
+    raw·feature_store가 이미 올라간 뒤 precompute에서 터져 부분 실패로 헷갈리게 된다
+    (도현, PR #47 코멘트).
     """
     import os
 
-    from src.config_loader import load_config
+    from src.config_loader import get_precompute_path, load_config
 
     cfg = load_config()
     d = cfg["data"]
@@ -57,8 +78,21 @@ def main() -> None:
         return
 
     base = (os.environ.get("S3_PREFIX") or d.get("s3_prefix") or "").strip("/")
+    targets = [
+        ("raw", d["raw_dir"]),
+        ("feature_store", d["feature_store_dir"]),
+        # 익일 추천 비중 — 서빙이 소비(§8-2). get_precompute_path()로 읽어 다른 소비자
+        # (precompute.py·s3_fetch.py·api/main.py)와 같은 config 접근 통로를 쓴다.
+        ("precompute", _precompute_upload_dir(get_precompute_path(cfg))),
+    ]
     total = 0
-    for name, local_dir in (("raw", d["raw_dir"]), ("feature_store", d["feature_store_dir"])):
+    for name, local_dir in targets:
+        if not local_dir:
+            print(f"  {name}: 업로드 경로 없음(설정에 디렉토리 구성요소 없음) → skip")
+            continue
+        if not Path(local_dir).is_dir():
+            print(f"  {name}: 디렉토리 없음({local_dir}) → skip")
+            continue
         prefix = f"{base}/{name}" if base else name
         keys = sync_dir_to_s3(local_dir, bucket, prefix)
         print(f"  {name}: {len(keys)}개 → s3://{bucket}/{prefix}/")
