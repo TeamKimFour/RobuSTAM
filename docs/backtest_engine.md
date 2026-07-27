@@ -15,6 +15,7 @@
 | 정책→백테스트 어댑터 | `src/backtest/policy.py` | ✅ 구현 (PR #43) |
 | walk-forward 백테스트 루프 | `src/backtest/runner.py` | ✅ 구현 (§4-3) |
 | 결과 저장 (S3) | `src/backtest/s3_results.py` | ✅ 구현 |
+| FE 대시보드용 JSON 익스포터 | `src/backtest/export.py` | ✅ 구현 (§4-4) |
 | 결과 저장 (DB 연동) | `src/backtest/engine.py` | ⏳ 도현과 협의 후 |
 
 ---
@@ -208,6 +209,53 @@ python -m src.backtest.runner --fold-id 2      # fold2만
 
 ---
 
+## 4-4. FE 대시보드용 JSON 익스포터 (`src/backtest/export.py`)
+
+`runner.run_fold()`를 모든 fold에서 실행해 전략별 NAV 시계열·지표를 하나의 JSON으로 조립,
+FE(`frontend/app/backtest/`)가 소비하는 정적 파일 `frontend/public/backtest.json`으로 저장한다.
+서빙 API(`src/api/`)는 건드리지 않는 **배치 산출물** — Vercel/Render 배포에서도 별도 인프라 없이
+정적 자원으로 동작한다.
+
+### JSON 계약
+`loader.ts`와 정확히 일치한다:
+```json
+{
+  "generated_at": "2026-07-27T05:12:33+00:00",
+  "initial_nav": 1000000,
+  "periods":   [{"fold_id": 1, "start": "2020-01-02", "end": "2021-12-31"}, ...],
+  "strategies": [
+    {
+      "name": "RL policy",
+      "color": "#8b5cf6",
+      "nav":     [{"date": "YYYY-MM-DD", "value": 정규화(초기=1)}, ...],
+      "metrics": {"cagr", "sharpe", "mdd", "vol", "total_return",
+                  "avg_turnover", "total_cost"}
+    },
+    ...  // "60:40", "1/N", "B&H"
+  ],
+  "fold_table": [{"fold_id", "period", "sharpe", "cagr", "mdd"}, ...],   // RL policy만
+  "comparison": [{"fold_id", "vs_benchmark": ...}, ...]                  // runner._compare 원본
+}
+```
+- **NAV 이어붙이기**: fold 3개는 test 블록이 disjoint(2020-21, 22-23, 24-25). 각 fold를
+  정규화(초기=1)한 뒤, 다음 fold의 값들에 이전 fold의 마지막 값을 배수로 곱해 **연속 곡선** 하나를
+  만든다. FE의 `PerformanceChart`가 mock과 동일한 shape을 기대해서 이렇게 조립한다.
+- **지표 재계산**: `summarize()`가 반환하는 fold별 지표는 순수 이어붙임 지표가 아니라 각 fold의
+  값이라, 익스포터가 이어붙인 시계열에서 CAGR·Sharpe·MDD·Vol을 다시 계산해 표에 노출한다.
+- **파일 미존재 → mock fallback**: 로컬 개발·모델 미학습 환경에서 JSON이 없으면 loader가
+  `mock.ts`로 조용히 넘어가고 뱃지가 "합성 데이터"로 표시된다. 코드에 절대 하드코딩된 값 없음.
+
+### CLI
+```bash
+python -m src.backtest.export                                      # 기본 경로에 저장
+python -m src.backtest.export --out frontend/public/backtest.json  # 명시
+python -m src.backtest.export --model-path runs/best.zip           # 모델 override
+```
+결과 파일은 `.gitignore`(`frontend/public/backtest.json`)로 추적 제외 — 코드가 아닌
+데이터 산출물이며, 학습 파이프라인·수동 실행이 원본이다.
+
+---
+
 ## 5. 설계 결정
 
 ### 5-1. 거래비용률 — config.yaml 단일 출처
@@ -245,3 +293,4 @@ python -m src.backtest.runner --fold-id 2      # fold2만
 | v0.3 | 2026-07-11 | `benchmark.py`(1/N·60:40·B&H) 구현 반영. 60:40 그룹 내부 균등분배 확정, B&H 실제 드리프트 계산 로직 명시. |
 | v0.4 | 2026-07-13 | `s3_results.py`(백테스트 결과 S3 저장) 구현 반영. `BacktestEngine.save_results()` 추가, 버킷은 `data.s3_bucket` 재사용. |
 | v0.5 | 2026-07-21 | §4-3 추가: `runner.py`(walk-forward 루프) 구현. fold당 policy+벤치마크 3종을 `fold{N}_{policy,1n,60_40,bh}` run_id로 각각 별도 저장(팀 확정). CLAUDE.md §1 판정(샤프 15%+ 개선 또는 MDD 20%+ 방어) 로직 추가. 이슈 #46 지표는 `summarize()` 확장으로 나중에 추가 가능하도록 결과 dict 구조만 열어둠. `policy.py`(PR #43, 어댑터) 누락돼 있던 상태표 행도 함께 보강. |
+| v0.6 | 2026-07-27 | §4-4 추가: `export.py`(FE 대시보드용 JSON 익스포터) 구현. `run_fold()`에 `nav_by_strategy` 필드 추가(additive). 4주 잔여 FE mock→실데이터 교체(수익곡선·벤치마크표·fold표 3위젯). 확장 지표(quantstats·기여도·상관 등)는 6주 작업에서 교체 예정. |

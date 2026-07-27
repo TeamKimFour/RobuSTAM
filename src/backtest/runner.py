@@ -92,6 +92,8 @@ def run_fold(
         "period": (시작일, 종료일) 문자열 튜플 (이 fold `split` 구간),
         "strategies": {"RL policy": {...}, "1/N": {...}, "60:40": {...}, "B&H": {...}},
                        # 각 값은 summarize()가 반환하는 지표 dict 그대로.
+        "nav_by_strategy": {전략명: pd.DataFrame(NAV 시계열, index=거래일)},
+                       # export.py 등 후처리에서 시계열이 필요할 때 소비 (S3 저장은 이미 수행됨).
         "s3_prefixes": {전략명: S3 prefix 또는 None(버킷 미설정 시 skip)},
         "comparison": {"1/N": {...}, "60:40": {...}, "B&H": {...}},
                        # _compare_to_benchmarks() 결과 — CLAUDE.md §1 판정.
@@ -128,6 +130,7 @@ def run_fold(
         "fold_id": fold_id,
         "period": (str(policy_nav.index[0].date()), str(policy_nav.index[-1].date())),
         "strategies": strategies,
+        "nav_by_strategy": nav_by_strategy,
         "s3_prefixes": s3_prefixes,
         "comparison": _compare_to_benchmarks(strategies),
     }

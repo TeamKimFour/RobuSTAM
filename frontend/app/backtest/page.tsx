@@ -6,6 +6,7 @@ import ContributionChart from "./ContributionChart";
 import CorrelationHeatmap from "./CorrelationHeatmap";
 import ExtendedRiskCard from "./ExtendedRiskCard";
 import FoldComparisonCard from "./FoldComparisonCard";
+import { loadBacktestSnapshot } from "./loader";
 import MetricsRow from "./MetricsRow";
 import MonthlyReturnsHeatmap from "./MonthlyReturnsHeatmap";
 import PerformanceChart from "./PerformanceChart";
@@ -14,13 +15,9 @@ import TurnoverChart from "./TurnoverChart";
 import UnderwaterCard from "./UnderwaterCard";
 import {
   ASSET_CONTRIBUTION_SERIES,
-  BACKTEST_METRICS,
-  BACKTEST_SERIES,
-  BENCHMARK_TABLE,
   CORRELATION_MATRIX,
   CUM_COST_SERIES,
   EXTENDED_RISK,
-  FOLD_TABLE,
   TURNOVER_SERIES,
   alphaSeries,
   bestWorstDays,
@@ -35,9 +32,10 @@ export const metadata = {
   title: "Backtest · RobuSTAM",
 };
 
-export default function BacktestPage() {
-  const rl = BACKTEST_SERIES[0];
-  const bench6040 = BACKTEST_SERIES[1];
+export default async function BacktestPage() {
+  const snapshot = await loadBacktestSnapshot();
+  const rl = snapshot.series[0];
+  const bench6040 = snapshot.series[1] ?? rl;
 
   const dd = [
     {
@@ -81,18 +79,18 @@ export default function BacktestPage() {
               편도 수수료 0.1% · 슬리피지 포함 · walk-forward test 구간
             </p>
           </div>
-          <NotConnectedBadge />
+          <DataSourceBadge source={snapshot.source} generatedAt={snapshot.generatedAt} />
         </header>
 
         <SectionLabel>핵심 지표</SectionLabel>
-        <MetricsRow metrics={BACKTEST_METRICS} />
+        <MetricsRow metrics={snapshot.metrics} />
         <ExtendedRiskCard risk={EXTENDED_RISK} />
 
         <SectionLabel>성과 vs 벤치마크</SectionLabel>
-        <PerformanceChart title="누적 NAV (초기 1.0)" series={BACKTEST_SERIES} yFormat="nav" />
+        <PerformanceChart title="누적 NAV (초기 1.0)" series={snapshot.series} yFormat="nav" />
         <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
           <PerformanceChart title="Drawdown (%)" series={dd} yFormat="percent" height={280} />
-          <BenchmarkTable rows={BENCHMARK_TABLE} />
+          <BenchmarkTable rows={snapshot.benchmarkTable} />
         </div>
 
         <AlphaChart title={`벤치마크 대비 초과수익 (vs ${bench6040.name})`} alpha={alpha} />
@@ -110,7 +108,7 @@ export default function BacktestPage() {
         <ContributionChart series={ASSET_CONTRIBUTION_SERIES} />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
           <CorrelationHeatmap matrix={CORRELATION_MATRIX} />
-          <FoldComparisonCard rows={FOLD_TABLE} />
+          <FoldComparisonCard rows={snapshot.foldTable} />
         </div>
 
         <SectionLabel>극단·수중 분석</SectionLabel>
@@ -151,7 +149,22 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function NotConnectedBadge() {
+function DataSourceBadge({
+  source,
+  generatedAt,
+}: {
+  source: "real" | "mock";
+  generatedAt: string | null;
+}) {
+  const isReal = source === "real";
+  const colors = isReal
+    ? { bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.40)", text: "#8be6c0" }
+    : { bg: "rgba(220,38,38,0.08)", border: "rgba(220,38,38,0.35)", text: "#f5a5a5" };
+  const label = isReal
+    ? "실데이터 (backtest.json)"
+    : "합성 데이터 (mock — python -m src.backtest.export 실행 시 실데이터로 교체)";
+  const suffix =
+    isReal && generatedAt ? ` · 생성 ${generatedAt.replace("T", " ").slice(0, 19)}Z` : "";
   return (
     <div
       style={{
@@ -159,19 +172,19 @@ function NotConnectedBadge() {
         alignItems: "center",
         gap: 8,
         padding: "8px 14px",
-        background: "rgba(220,38,38,0.08)",
-        border: "1px solid rgba(220,38,38,0.35)",
-        color: "#f5a5a5",
+        background: colors.bg,
+        border: `1px solid ${colors.border}`,
+        color: colors.text,
         borderRadius: 8,
         fontSize: 12,
-        maxWidth: 420,
+        maxWidth: 480,
         lineHeight: 1.4,
       }}
     >
       <span aria-hidden style={{ fontSize: 14 }}>●</span>
       <span>
-        <b>백엔드 백테스트 API 미연결.</b> 아래 값은 시연용 합성 데이터입니다.
-        엔진(src/backtest)이 결과 파일 규격을 확정하면 실 데이터로 교체됩니다.
+        <b>{label}</b>
+        {suffix}
       </span>
     </div>
   );

@@ -104,6 +104,8 @@ node_modules/
 .next/
 .vercel/
 *.local
+# FE 대시보드가 소비하는 백테스트 산출물(파이썬 익스포터가 생성). 코드가 아닌 데이터.
+frontend/public/backtest.json
 
 # ===== IDE / 에디터 =====
 .idea/
