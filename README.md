@@ -150,7 +150,7 @@ npm run dev                    # http://localhost:3000
 
 - `/` — 랜딩 (Backtest / Inference / Docs)
 - `/inference` — FastAPI `/inference/latest` 실시간 조회 (배치 미준비 시 503 안내 표시)
-- `/backtest` — 성과곡선·Drawdown·벤치마크 비교 (백엔드 API 미연결 상태에서는 시연용 합성 데이터)
+- `/backtest` — 성과곡선·Drawdown·벤치마크 비교. `frontend/public/backtest.json`이 있으면 실데이터, 없으면 mock으로 자동 fallback(뱃지로 상태 표시). 생성: `python -m src.backtest.export` ([docs/backtest_engine.md §4-4](docs/backtest_engine.md))
 
 FastAPI를 함께 띄우려면:
 
