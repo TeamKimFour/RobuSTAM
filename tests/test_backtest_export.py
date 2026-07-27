@@ -179,3 +179,83 @@ def test_write_export_creates_file_with_valid_json(tmp_path, cfg_path):
     parsed = json.loads(out.read_text(encoding="utf-8"))
     assert parsed["initial_nav"] == 1_000_000
     assert not (tmp_path / "sub" / "backtest.json.tmp").exists()  # 임시파일 잔여 없음
+
+
+# ── ⑤ upload_to_s3: S3 키 계약·skip 동작 ──
+def test_s3_key_matches_frontend_contract():
+    """FE prebuild(scripts/fetch-backtest.mjs)와 반드시 같은 키 규칙을 써야 한다."""
+    assert ex._s3_key("robustam") == "robustam/frontend/backtest.json"
+    assert ex._s3_key("") == "frontend/backtest.json"
+    assert ex._s3_key("/robustam/") == "robustam/frontend/backtest.json"  # 슬래시 trim
+
+
+@pytest.fixture()
+def _cfg_with_bucket(tmp_path):
+    cfg = {
+        "assets": ["SPY", "EWY", "TLT", "GLD", "SHV"],
+        "window": 30,
+        "transaction_cost": 0.001,
+        "split": {"test_blocks": [["2020-01-01", "2021-12-31"]]},
+        "data": {"s3_bucket": "test-bucket", "s3_prefix": "robustam"},
+    }
+    p = tmp_path / "cfg.yaml"
+    p.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    return str(p)
+
+
+def test_upload_skips_when_bucket_missing(tmp_path, monkeypatch, capsys):
+    """버킷이 config·환경변수 어디에도 없으면 조용히 skip한다."""
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    cfg = {"data": {}, "assets": ["SPY", "EWY", "TLT", "GLD", "SHV"],
+           "window": 30, "transaction_cost": 0.001}
+    p = tmp_path / "cfg.yaml"
+    p.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    payload = tmp_path / "backtest.json"
+    payload.write_text('{"generated_at": "x"}', encoding="utf-8")
+
+    url = ex.upload_to_s3(str(payload), str(p))
+    assert url is None
+    assert "skip" in capsys.readouterr().out.lower()
+
+
+def test_upload_puts_object_at_frontend_key(tmp_path, monkeypatch, _cfg_with_bucket):
+    """계약 키(`{prefix}/frontend/backtest.json`)에 정확히 올라간다 (moto)."""
+    moto = pytest.importorskip("moto")
+    boto3 = pytest.importorskip("boto3")
+    from moto import mock_aws
+
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    monkeypatch.delenv("S3_PREFIX", raising=False)
+    payload = tmp_path / "backtest.json"
+    payload.write_bytes(b'{"strategies": []}')
+
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket="test-bucket")
+        url = ex.upload_to_s3(str(payload), _cfg_with_bucket, client=s3)
+
+        assert url is not None
+        assert url.endswith("robustam/frontend/backtest.json")
+        obj = s3.get_object(Bucket="test-bucket", Key="robustam/frontend/backtest.json")
+        assert obj["Body"].read() == b'{"strategies": []}'
+        assert obj["ContentType"] == "application/json"
+
+
+def test_upload_env_bucket_overrides_config(tmp_path, monkeypatch, _cfg_with_bucket):
+    """S3_BUCKET 환경변수가 config의 버킷을 override한다(s3_sync와 같은 관례)."""
+    moto = pytest.importorskip("moto")
+    boto3 = pytest.importorskip("boto3")
+    from moto import mock_aws
+
+    monkeypatch.setenv("S3_BUCKET", "override-bucket")
+    monkeypatch.delenv("S3_PREFIX", raising=False)
+    payload = tmp_path / "backtest.json"
+    payload.write_bytes(b'{}')
+
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket="override-bucket")
+        url = ex.upload_to_s3(str(payload), _cfg_with_bucket, client=s3)
+
+    assert url is not None
+    assert "override-bucket" in url

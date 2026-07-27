@@ -191,12 +191,71 @@ def write_export(bundle: dict[str, Any], out_path: str = DEFAULT_OUT_PATH) -> No
     tmp.replace(out)
 
 
+# S3 키 계약: {prefix}/frontend/backtest.json — Vercel prebuild(scripts/fetch-backtest.mjs)가
+# BACKTEST_JSON_URL로 이 객체를 내려받는다. precompute latest.json(§8-2)과 같은 prefix 규칙.
+S3_KEY_SUFFIX = "frontend/backtest.json"
+
+
+def _s3_key(prefix: str) -> str:
+    prefix = prefix.strip("/")
+    return f"{prefix}/{S3_KEY_SUFFIX}" if prefix else S3_KEY_SUFFIX
+
+
+def upload_to_s3(
+    local_path: str,
+    config_path: str = DEFAULT_CONFIG_PATH,
+    *,
+    bucket: str | None = None,
+    client=None,
+) -> str | None:
+    """생성된 JSON을 S3에 올린다.
+
+    버킷은 환경변수(`S3_BUCKET`) → 인자 → config(`data.s3_bucket`) 순으로 결정한다
+    (s3_sync·s3_results와 동일 관례). 버킷 미설정 시 조용히 skip해 로컬 개발을 막지 않는다.
+    Content-Type은 `application/json`으로 명시(브라우저·CDN 캐시 힌트).
+
+    Returns
+    -------
+    업로드된 S3 URL(가상 호스트 스타일) 또는 skip 시 None. Vercel prebuild 스크립트의
+    `BACKTEST_JSON_URL`로 이 URL을 쓴다.
+    """
+    import os
+
+    cfg = load_config(config_path)
+    d = cfg.get("data", {})
+    bucket = os.environ.get("S3_BUCKET") or bucket or d.get("s3_bucket")
+    if not bucket:
+        print("[export] S3 버킷 미설정(env·config 모두 없음) → 업로드 skip")
+        return None
+
+    prefix = (os.environ.get("S3_PREFIX") or d.get("s3_prefix") or "").strip("/")
+    key = _s3_key(prefix)
+    region = os.environ.get("AWS_DEFAULT_REGION") or "ap-northeast-2"
+
+    if client is None:
+        import boto3  # boto3는 requirements.txt에 포함됨(무거운 의존 아님).
+
+        client = boto3.client("s3")
+
+    with open(local_path, "rb") as f:
+        client.put_object(Bucket=bucket, Key=key, Body=f.read(), ContentType="application/json")
+
+    url = f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
+    print(f"[export] 업로드 완료 → {url}")
+    return url
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="FE 대시보드용 백테스트 결과 JSON 익스포터")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--out", default=DEFAULT_OUT_PATH)
     parser.add_argument("--model-path", default=None, help="기본값은 config.inference.model_path")
     parser.add_argument("--initial-nav", type=float, default=1_000_000)
+    parser.add_argument(
+        "--upload-s3",
+        action="store_true",
+        help="생성 후 S3(=Vercel prebuild 소스)에도 업로드. 버킷 미설정 시 조용히 skip.",
+    )
     args = parser.parse_args()
 
     from stable_baselines3 import PPO
@@ -211,6 +270,11 @@ def main() -> None:
     write_export(bundle, args.out)
     print(f"백테스트 export 완료 → {args.out}")
     print(f"  fold {len(bundle['periods'])}개 · 전략 {len(bundle['strategies'])}개 저장")
+
+    if args.upload_s3:
+        url = upload_to_s3(args.out, args.config)
+        if url:
+            print(f"  Vercel 프리빌드용 URL: BACKTEST_JSON_URL={url}")
 
 
 if __name__ == "__main__":
