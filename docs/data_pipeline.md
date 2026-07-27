@@ -76,6 +76,9 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
   (`write_features / load_features / partition_path`) + SQLite 메타
   (`init_meta_db / write_run / write_feature_columns / write_fold / read_*`). I/O 골격 구현 완료,
   실데이터는 2주차 지표·정규화 후 채움.
+- **`analyze_features.py`·`screen_features.py`** — 피처 진단(모델 불필요). `analyze_features`는 지표
+  예측력(IC)·분포 드리프트, `screen_features`는 대리모델(Ridge·GBM)로 피처셋별 예측력을 비교해
+  RL 없이 후보를 거른다(이슈 #34, `docs/model_diagnosis.md`). 실행 `python -m src.data.screen_features`.
 - **`inference/precompute.py`** — 오늘 State→익일 비중(`latest.json`) 생산자(§8). `build_today_obs`
   (민지: 오늘 정규화 187 obs) + `generate_latest`(도현: predict→softmax→원자적 기록). `config.inference`가
   정규화 통계 출처를 지정. 실행 `python -m src.inference.precompute`.

@@ -6,5 +6,6 @@
 notebook        # Jupyter — EDA 노트북 실행
 plotly          # 인터랙티브 차트 (가격·수익률·상관)
 nbconvert       # 노트북 헤드리스 실행/검증
+scikit-learn    # 대리모델 — src/data/screen_features (피처 스크리닝, 테스트는 importorskip)
 moto==5.2.2     # S3 mock — test_s3_sync (실제 AWS 없이 검증)
 httpx2==2.5.0   # FastAPI TestClient 구동에 필요 — test_api (CI엔 미설치, importorskip으로 가드)
