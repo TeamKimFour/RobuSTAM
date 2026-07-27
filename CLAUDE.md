@@ -160,5 +160,6 @@ RobuSTAM/
 
 ## 8. 참고 문서
 - [docs/state_spec.md](docs/state_spec.md) — State(관측공간) 명세 SSOT (`Box(187)`, 인덱스 맵, 부속결정)
+- [docs/env_spec.md](docs/env_spec.md) — 환경(Gymnasium) 파라미터 SSOT (PortfolioEnv·DiscretePortfolioEnv·reward 계약)
 - [docs/data_pipeline.md](docs/data_pipeline.md) — 데이터 파이프라인 설계·Feature Store·precompute 계약
 - [docs/model_training.md](docs/model_training.md) — PPO 학습 파이프라인·RunPod 실행 가이드
