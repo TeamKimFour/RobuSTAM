@@ -151,6 +151,7 @@ npm run dev                    # http://localhost:3000
 - `/` — 랜딩 (Backtest / Inference / Docs)
 - `/inference` — FastAPI `/inference/latest` 실시간 조회 (배치 미준비 시 503 안내 표시)
 - `/backtest` — 성과곡선·Drawdown·벤치마크 비교. `frontend/public/backtest.json`이 있으면 실데이터, 없으면 mock으로 자동 fallback(뱃지로 상태 표시). 생성: `python -m src.backtest.export` ([docs/backtest_engine.md §4-4](docs/backtest_engine.md))
+  - **Vercel 배포**에서는 `npm run prebuild`가 `BACKTEST_JSON_URL`에서 다운로드해 `public/`에 배치한다. 미설정 시 자동 skip → mock으로 배포된다(빌드 실패 없음). 백엔드가 S3에 올리려면 `python -m src.backtest.export --upload-s3`.
 
 FastAPI를 함께 띄우려면:
 

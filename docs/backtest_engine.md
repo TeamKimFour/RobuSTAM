@@ -247,12 +247,36 @@ FE(`frontend/app/backtest/`)가 소비하는 정적 파일 `frontend/public/back
 
 ### CLI
 ```bash
-python -m src.backtest.export                                      # 기본 경로에 저장
+python -m src.backtest.export                                      # 기본 경로에 저장(로컬만)
 python -m src.backtest.export --out frontend/public/backtest.json  # 명시
 python -m src.backtest.export --model-path runs/best.zip           # 모델 override
+python -m src.backtest.export --upload-s3                          # 로컬 저장 + S3 업로드
 ```
 결과 파일은 `.gitignore`(`frontend/public/backtest.json`)로 추적 제외 — 코드가 아닌
 데이터 산출물이며, 학습 파이프라인·수동 실행이 원본이다.
+
+### Vercel 배포 데이터 확보 흐름
+Vercel은 저장소를 clone해 빌드하므로 `.gitignore`된 `backtest.json`은 자동으로 못 얻는다.
+아래 3단계로 실데이터를 노출한다.
+
+```
+① 백엔드                            ② S3                                     ③ Vercel prebuild
+python -m src.backtest.export      s3://{bucket}/{prefix}/frontend/         node scripts/fetch-backtest.mjs
+  --upload-s3           ─────────>  backtest.json               ─────────>   → public/backtest.json
+                                    (ContentType: application/json)          → loader.ts가 실데이터로 렌더
+```
+
+- **S3 키 계약**: `{s3_prefix}/frontend/backtest.json` (`_s3_key()`). 서빙측 `s3_fetch.py`가
+  쓰는 `{prefix}/precompute/latest.json`과 동일한 prefix 규칙이라 IAM/버킷 정책 관리 통일.
+- **Vercel 환경변수**: `BACKTEST_JSON_URL=https://{bucket}.s3.{region}.amazonaws.com/{prefix}/frontend/backtest.json`
+  (Vercel 대시보드 → Project → Environment Variables). 미설정 시 prebuild가 조용히 skip
+  → 배포는 mock 뱃지로 뜬다(빌드 실패하지 않음).
+- **접근 방식**: S3 객체는 public-read여야 Vercel의 `fetch()`가 접근 가능하다. 팀 정책상
+  민감정보가 아니면 버킷 정책으로 `frontend/*` 프리픽스만 열어두는 걸 권장(민감하면
+  대안: CloudFront + signed URL, 또는 익스포터가 매번 presigned URL을 발급해 Vercel에
+  주입 — 별도 협의).
+- **실패 정책**: prebuild 스크립트는 어떤 에러(URL 없음·HTTP 4xx/5xx·파싱 오류)에서도
+  exit 0. 빌드가 절대 중단되지 않는다 — mock으로라도 대시보드가 뜨는 것을 우선한다.
 
 ---
 
@@ -294,3 +318,4 @@ python -m src.backtest.export --model-path runs/best.zip           # 모델 over
 | v0.4 | 2026-07-13 | `s3_results.py`(백테스트 결과 S3 저장) 구현 반영. `BacktestEngine.save_results()` 추가, 버킷은 `data.s3_bucket` 재사용. |
 | v0.5 | 2026-07-21 | §4-3 추가: `runner.py`(walk-forward 루프) 구현. fold당 policy+벤치마크 3종을 `fold{N}_{policy,1n,60_40,bh}` run_id로 각각 별도 저장(팀 확정). CLAUDE.md §1 판정(샤프 15%+ 개선 또는 MDD 20%+ 방어) 로직 추가. 이슈 #46 지표는 `summarize()` 확장으로 나중에 추가 가능하도록 결과 dict 구조만 열어둠. `policy.py`(PR #43, 어댑터) 누락돼 있던 상태표 행도 함께 보강. |
 | v0.6 | 2026-07-27 | §4-4 추가: `export.py`(FE 대시보드용 JSON 익스포터) 구현. `run_fold()`에 `nav_by_strategy` 필드 추가(additive). 4주 잔여 FE mock→실데이터 교체(수익곡선·벤치마크표·fold표 3위젯). 확장 지표(quantstats·기여도·상관 등)는 6주 작업에서 교체 예정. |
+| v0.7 | 2026-07-27 | §4-4에 Vercel 배포 데이터 확보 흐름 추가. `export.py --upload-s3` + `frontend/scripts/fetch-backtest.mjs`(prebuild 훅)로 백엔드→S3→Vercel 파이프라인 구축. `BACKTEST_JSON_URL` 미설정 시 mock으로 조용히 fallback. |
