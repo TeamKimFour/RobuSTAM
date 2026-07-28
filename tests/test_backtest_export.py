@@ -125,7 +125,34 @@ def test_metrics_from_points_handles_short_series():
     }
 
 
-# ── ③ build_export: 계약 준수 ──
+# ── ③ _summarize_verdict: 벤치마크별 fold 통과 집계 (합격/불합격 이분법 없음) ──
+def test_summarize_verdict_counts_passed_folds():
+    fold_results = [
+        {"comparison": {"1/N": {"beats_target": True}, "60:40": {"beats_target": False},
+                        "B&H": {"beats_target": True}}},
+        {"comparison": {"1/N": {"beats_target": True}, "60:40": {"beats_target": False},
+                        "B&H": {"beats_target": False}}},
+        {"comparison": {"1/N": {"beats_target": False}, "60:40": {"beats_target": False},
+                        "B&H": {"beats_target": True}}},
+    ]
+    out = ex._summarize_verdict(fold_results)
+
+    assert out["1/N"] == {"folds_passed": 2, "folds_total": 3, "pass_rate": pytest.approx(2 / 3)}
+    assert out["60:40"] == {"folds_passed": 0, "folds_total": 3, "pass_rate": 0.0}
+    assert out["B&H"] == {"folds_passed": 2, "folds_total": 3, "pass_rate": pytest.approx(2 / 3)}
+    # 이분법 합격/불합격 필드는 넣지 않는다(팀 §1 기준 미확정 — 이슈 #46).
+    for v in out.values():
+        assert "overall_pass" not in v
+
+
+def test_summarize_verdict_handles_empty_fold_results():
+    """fold가 하나도 없으면 0으로 나누기 없이 folds_total=0·pass_rate=0.0이어야 한다."""
+    out = ex._summarize_verdict([])
+    for name in ("1/N", "60:40", "B&H"):
+        assert out[name] == {"folds_passed": 0, "folds_total": 0, "pass_rate": 0.0}
+
+
+# ── ④ build_export: 계약 준수 ──
 def test_build_export_produces_valid_contract(cfg_path):
     bundle = ex.build_export(
         model=None, config_path=cfg_path, initial_nav=1_000_000,
@@ -133,8 +160,17 @@ def test_build_export_produces_valid_contract(cfg_path):
     )
 
     # 최상위 키
-    for key in ("generated_at", "initial_nav", "periods", "strategies", "fold_table", "comparison"):
+    for key in (
+        "generated_at", "initial_nav", "periods", "strategies",
+        "fold_table", "comparison", "verdict_summary",
+    ):
         assert key in bundle, f"missing key: {key}"
+
+    # _fake_run_fold_factory는 3 fold 전부 beats_target=False로 고정 — 통과 0건이어야 한다.
+    for name in ("1/N", "60:40", "B&H"):
+        assert bundle["verdict_summary"][name] == {
+            "folds_passed": 0, "folds_total": 3, "pass_rate": 0.0,
+        }
 
     # 3 fold × 4 전략
     assert len(bundle["periods"]) == 3
@@ -167,7 +203,7 @@ def test_build_export_nav_is_monotonic_when_all_folds_growing(cfg_path):
         assert all(values[i + 1] >= values[i] for i in range(len(values) - 1)), s["name"]
 
 
-# ── ④ write_export: 원자적 쓰기 ──
+# ── ⑤ write_export: 원자적 쓰기 ──
 def test_write_export_creates_file_with_valid_json(tmp_path, cfg_path):
     bundle = ex.build_export(
         model=None, config_path=cfg_path, initial_nav=1_000_000,
@@ -181,7 +217,7 @@ def test_write_export_creates_file_with_valid_json(tmp_path, cfg_path):
     assert not (tmp_path / "sub" / "backtest.json.tmp").exists()  # 임시파일 잔여 없음
 
 
-# ── ⑤ upload_to_s3: S3 키 계약·skip 동작 ──
+# ── ⑥ upload_to_s3: S3 키 계약·skip 동작 ──
 def test_s3_key_matches_frontend_contract():
     """FE prebuild(scripts/fetch-backtest.mjs)와 반드시 같은 키 규칙을 써야 한다."""
     assert ex._s3_key("robustam") == "robustam/frontend/backtest.json"

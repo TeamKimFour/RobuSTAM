@@ -427,7 +427,8 @@ python -m src.models.publish download    # 서빙 환경 (CI·EC2) — precomput
 `policy.zip`이 올라간 것을 확인해 `daily.yml`에서 활성화했다. 순서:
 
 ```
-collect → build → AWS 자격증명(OIDC) → policy.zip 수신(publish download) → precompute → S3 업로드
+collect → build → AWS 자격증명(OIDC) → policy.zip 수신(publish download) → precompute
+    → 백테스트 리포트(export.py --upload-s3, docs/backtest_engine.md §4-4) → S3 업로드
 ```
 
 - **policy.zip 수신**이 AWS 인증 바로 다음, precompute 바로 앞으로 옮겨졌다 — precompute가
@@ -500,3 +501,4 @@ S3에 업로드될 수 있는** 검증되지 않은 경로였다. `get_precomput
 | v0.16 | 2026-07-21 | 도현 PR #47 코멘트 반영: `s3_sync.py` 업로드 대상에 `precompute` 추가 — §8-3으로 활성화된 precompute 산출물이 잡 종료와 함께 사라지던 문제(§8-2 503과 동일 근본원인)를 해결. 디렉토리 없으면 skip하는 가드 포함(로컬 등 precompute 미실행 환경에서 raw·feature_store 업로드가 부분 실패로 깨지지 않도록). |
 | v0.17 | 2026-07-25 | 도현 정식 리뷰(PR #47) 반영: `policy.zip 수신`·`precompute` 스텝에 `continue-on-error: true` 추가 — 실패해도 뒤의 `S3 업로드`(raw·feature_store)가 계속 돌도록 데이터 갱신과 모델 추론 성공을 분리. `sync_dir_to_s3`가 `*.tmp` 잔여물을 업로드 대상에서 제외하도록 방어 추가. gate 조건이 버킷 미확인이라는 지적은 경미로 판단해 후속으로 미룸. |
 | v0.18 | 2026-07-25 | 셀프리뷰로 발견: `s3_sync.py`가 `data.precompute_path`를 `d["precompute_path"]`로 직접 읽어 다른 소비자(precompute.py·s3_fetch.py·api/main.py)와 다른 config 접근 통로를 썼고, 그 값에 디렉토리 구성요소가 없으면(`Path(...).parent`가 cwd) 작업 디렉토리 전체가 업로드될 수 있었다. `get_precompute_path()`로 통일하고, `_precompute_upload_dir()` 가드로 그런 경우 빈 문자열을 돌려줘 안전하게 skip하도록 수정. |
+| v0.19 | 2026-07-28 | §8-3 순서에 백테스트 리포트 스텝 추가: `daily.yml`이 precompute 뒤·S3 업로드 앞에서 `python -m src.backtest.export --upload-s3`를 실행(같은 gate·continue-on-error 패턴). 상세는 `docs/backtest_engine.md` §4-4. |

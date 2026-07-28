@@ -234,7 +234,12 @@ FE(`frontend/app/backtest/`)가 소비하는 정적 파일 `frontend/public/back
     ...  // "60:40", "1/N", "B&H"
   ],
   "fold_table": [{"fold_id", "period", "sharpe", "cagr", "mdd"}, ...],   // RL policy만
-  "comparison": [{"fold_id", "vs_benchmark": ...}, ...]                  // runner._compare 원본
+  "comparison": [{"fold_id", "vs_benchmark": ...}, ...],                 // runner._compare 원본
+  "verdict_summary": {                                                  // 벤치마크별 fold 통과 집계
+    "1/N":   {"folds_passed": 1, "folds_total": 3, "pass_rate": 0.333},
+    "60:40": {"folds_passed": 0, "folds_total": 3, "pass_rate": 0.0},
+    "B&H":   {"folds_passed": 2, "folds_total": 3, "pass_rate": 0.667}
+  }
 }
 ```
 - **NAV 이어붙이기**: fold 3개는 test 블록이 disjoint(2020-21, 22-23, 24-25). 각 fold를
@@ -244,6 +249,11 @@ FE(`frontend/app/backtest/`)가 소비하는 정적 파일 `frontend/public/back
   값이라, 익스포터가 이어붙인 시계열에서 CAGR·Sharpe·MDD·Vol을 다시 계산해 표에 노출한다.
 - **파일 미존재 → mock fallback**: 로컬 개발·모델 미학습 환경에서 JSON이 없으면 loader가
   `mock.ts`로 조용히 넘어가고 뱃지가 "합성 데이터"로 표시된다. 코드에 절대 하드코딩된 값 없음.
+- **`verdict_summary`(`_summarize_verdict()`)**: 벤치마크별로 CLAUDE.md §1 판정
+  (`comparison[name]["beats_target"]`)을 만족한 fold 개수·비율만 집계한다. 이슈 #46
+  (비중편차·회전율 등 판정 기준)이 팀 미확정이라 `"overall_pass"` 같은 이분법 합격/불합격
+  필드는 일부러 넣지 않았다 — 숫자만 내고 판정은 사람이 한다. `loader.ts`는 아직 이 키를
+  읽지 않는다(옵셔널 필드라 추가해도 FE 동작에 영향 없음).
 
 ### CLI
 ```bash
@@ -254,6 +264,11 @@ python -m src.backtest.export --upload-s3                          # 로컬 저�
 ```
 결과 파일은 `.gitignore`(`frontend/public/backtest.json`)로 추적 제외 — 코드가 아닌
 데이터 산출물이며, 학습 파이프라인·수동 실행이 원본이다.
+
+### daily.yml 자동화
+"추천 비중 precompute" 바로 다음, "S3 업로드" 바로 앞에서 `--upload-s3`로 매일 실행된다
+(policy.zip 수신·precompute와 동일하게 `vars.AWS_ROLE_ARN` gate + `continue-on-error: true`
+— 백테스트 리포트 실패가 daily.yml 본연의 데이터 갱신 임무를 막지 않는다).
 
 ### Vercel 배포 데이터 확보 흐름
 Vercel은 저장소를 clone해 빌드하므로 `.gitignore`된 `backtest.json`은 자동으로 못 얻는다.
@@ -319,3 +334,4 @@ python -m src.backtest.export      s3://{bucket}/{prefix}/frontend/         node
 | v0.5 | 2026-07-21 | §4-3 추가: `runner.py`(walk-forward 루프) 구현. fold당 policy+벤치마크 3종을 `fold{N}_{policy,1n,60_40,bh}` run_id로 각각 별도 저장(팀 확정). CLAUDE.md §1 판정(샤프 15%+ 개선 또는 MDD 20%+ 방어) 로직 추가. 이슈 #46 지표는 `summarize()` 확장으로 나중에 추가 가능하도록 결과 dict 구조만 열어둠. `policy.py`(PR #43, 어댑터) 누락돼 있던 상태표 행도 함께 보강. |
 | v0.6 | 2026-07-27 | §4-4 추가: `export.py`(FE 대시보드용 JSON 익스포터) 구현. `run_fold()`에 `nav_by_strategy` 필드 추가(additive). 4주 잔여 FE mock→실데이터 교체(수익곡선·벤치마크표·fold표 3위젯). 확장 지표(quantstats·기여도·상관 등)는 6주 작업에서 교체 예정. |
 | v0.7 | 2026-07-27 | §4-4에 Vercel 배포 데이터 확보 흐름 추가. `export.py --upload-s3` + `frontend/scripts/fetch-backtest.mjs`(prebuild 훅)로 백엔드→S3→Vercel 파이프라인 구축. `BACKTEST_JSON_URL` 미설정 시 mock으로 조용히 fallback. |
+| v0.8 | 2026-07-28 | `_summarize_verdict()` 추가 — 벤치마크별 fold 통과 개수·비율(`verdict_summary`)을 JSON 계약에 포함. 이슈 #46 판정 기준 미확정이라 이분법 합격/불합격 필드는 넣지 않음. `daily.yml`에 `export.py --upload-s3` 스텝을 precompute 뒤·S3 업로드 앞에 추가(같은 gate·continue-on-error 패턴). |
