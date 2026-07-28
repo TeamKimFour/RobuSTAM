@@ -19,7 +19,7 @@ Vercel 배포 대상 대시보드. Plotly.js로 자산 비중·성과곡선을 �
 
 | 이름 | 기본값 | 설명 |
 | --- | --- | --- |
-| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8000` | FastAPI 베이스 URL. 배포 시 nginx/CloudFront URL로 교체 |
+| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8000` | FastAPI 베이스 URL. 배포 시 Render API URL(robustam-api.onrender.com)로 교체 |
 
 `.env.example` 참조. `NEXT_PUBLIC_` 접두어는 클라이언트 번들 노출 대상만.
 

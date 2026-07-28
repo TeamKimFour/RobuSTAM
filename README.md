@@ -50,52 +50,19 @@ docker run --rm -v "$PWD/data:/app/data" robustam-pipeline src.data.collect
 docker run --rm -v "$PWD/data:/app/data" robustam-pipeline src.data.build
 ```
 
-## Docker Compose 실행 (API + nginx HTTPS)
+## Docker Compose 실행 (로컬 개발)
 
 FastAPI 추론 서버(현재는 헬스체크 placeholder, `src/api/` — 도현 실제 코드로 교체 예정)를
-nginx 리버스 프록시 뒤에서 self-signed HTTPS로 띄운다.
+로컬에서 띄운다.
 
 ```bash
-# 1) self-signed 인증서 생성 (최초 1회, git에 커밋되지 않음)
-bash docker/nginx/generate_cert.sh
-
-# 2) 빌드 후 실행
 docker compose up --build
 ```
 
-- FastAPI: `http://localhost:8000` (컨테이너 간 통신·직접 디버깅용)
-- nginx(HTTPS): `https://localhost` → `/health` 호출 시 `{"status": "ok"}` 응답 확인
+- FastAPI: `http://localhost:8000/health` → `{"status": "ok"}` 응답 확인
 
-```bash
-curl -k https://localhost/health
-```
-
-`-k`(또는 브라우저에서 "안전하지 않음" 경고 무시)가 필요한 이유: self-signed 인증서라
-공인 CA가 서명하지 않았기 때문이다. 로컬 개발 환경에서는 정상이며, 실제 배포 시에는
-공인 인증서(Let's Encrypt 등)로 교체해야 한다.
-
-## Docker Compose 실행 (프로덕션 — API + Cloudflare Tunnel)
-
-`docker-compose.prod.yml`은 로컬용 nginx(self-signed HTTPS) 대신 Cloudflare Tunnel이
-공인 도메인의 TLS 종단을 전담하는 구조다. 호스트에 포트를 열지 않고 `cloudflared`가
-아웃바운드로만 Cloudflare 엣지에 연결한다.
-
-`fastapi` 컨테이너는 데이터 볼륨을 공유하지 않는 stateless 구조라, 기동 시 + 주기적으로
-S3에서 `latest.json`을 직접 받아온다(`src/inference/s3_fetch.py`, `docs/data_pipeline.md` §8-2).
-
-```bash
-# 1) .env.prod 준비 (최초 1회, git에 커밋되지 않음)
-cp .env.prod.example .env.prod
-# CLOUDFLARE_TUNNEL_TOKEN 값을 Cloudflare Zero Trust 대시보드에서 발급받아 채운다.
-# S3_BUCKET/S3_PREFIX는 보통 비워둬도 config.yaml 값을 그대로 쓴다.
-# AWS 자격증명은 배포 서버에 IAM Role(인스턴스 프로파일)이 있으면 비워둔다.
-
-# 2) 빌드 후 실행
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
-```
-
-> **TODO:** 실제 도메인이 아직 확정되지 않았다. 도메인 확정 후 Cloudflare 대시보드에서
-> Public Hostname → `fastapi:8000` 라우팅을 설정해야 외부에서 접근 가능하다.
+프로덕션 배포는 Render Blueprint(`render.yaml`)로 대체됨 — nginx self-signed HTTPS,
+Cloudflare Tunnel 방식은 더 이상 쓰지 않음 (Render가 HTTPS/도메인 자동 처리).
 
 ## S3 업로드 (선택 — 클라우드 공유)
 
