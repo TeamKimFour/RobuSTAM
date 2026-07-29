@@ -1,6 +1,7 @@
 name: Daily Feature Store
 
-# 매일 데이터 수집 → Feature Store 빌드 → policy.zip 수신 → precompute → (설정 시) S3 업로드.
+# 매일 데이터 수집 → Feature Store 빌드 → policy.zip 수신 → precompute
+# → 백테스트 리포트 → (설정 시) S3 업로드.
 # 데일리 리밸런싱 서비스의 데이터 갱신 심장박동.
 on:
   schedule:
@@ -63,6 +64,14 @@ jobs:
         if: vars.AWS_ROLE_ARN != ''
         continue-on-error: true
         run: python -m src.inference.precompute
+
+      - name: 백테스트 3지표 리포트 생성 + S3 업로드
+        if: vars.AWS_ROLE_ARN != ''
+        continue-on-error: true
+        env:
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+        run: python -m src.backtest.export --upload-s3
 
       - name: S3 업로드
         if: vars.AWS_ROLE_ARN != ''

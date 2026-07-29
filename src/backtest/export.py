@@ -24,6 +24,10 @@
         ],
         "fold_table": [{"fold_id", "period", "sharpe", "cagr", "mdd"}, ...]   # RL policy만
         "comparison": [{"fold_id", "vs_benchmark": {...}}, ...]               # runner._compare_to_benchmarks 원본
+        "verdict_summary": {                                                 # 벤치마크별 fold 통과 집계
+            "1/N": {"folds_passed": int, "folds_total": int, "pass_rate": float}, ...
+        }   # 이슈 #46 판정 기준 미확정 — 숫자만 내고 합격/불합격 이분법은 넣지 않음.
+            # loader.ts는 아직 이 키를 안 읽음(옵셔널 필드라 추가해도 FE는 그대로 동작).
     }
 
 실행:
@@ -110,6 +114,29 @@ def _metrics_from_points(points: list[dict[str, Any]]) -> dict[str, float]:
     }
 
 
+def _summarize_verdict(fold_results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """벤치마크별 fold 통과 현황을 집계한다.
+
+    `fold_results`는 `run_fold()` 반환 dict들의 리스트 — 각 `comparison`은
+    `{"1/N": {..., "beats_target": bool}, "60:40": {...}, "B&H": {...}}` (CLAUDE.md §1 판정).
+    이슈 #46(비중편차·회전율 등 판정 기준)이 팀 미확정이라, "overall_pass" 같은 이분법
+    합격/불합격 필드는 넣지 않고 fold 통과 개수·비율 숫자만 낸다 — 판정은 사람이 한다.
+    """
+    benchmarks = [name for name in STRATEGY_ORDER if name != "RL policy"]
+    total = len(fold_results)
+    summary: dict[str, dict[str, Any]] = {}
+    for name in benchmarks:
+        passed = sum(
+            1 for r in fold_results if r["comparison"].get(name, {}).get("beats_target")
+        )
+        summary[name] = {
+            "folds_passed": passed,
+            "folds_total": total,
+            "pass_rate": (passed / total) if total > 0 else 0.0,
+        }
+    return summary
+
+
 def build_export(
     model,
     config_path: str = DEFAULT_CONFIG_PATH,
@@ -179,6 +206,7 @@ def build_export(
         "comparison": [
             {"fold_id": r["fold_id"], "vs_benchmark": r["comparison"]} for r in fold_results
         ],
+        "verdict_summary": _summarize_verdict(fold_results),
     }
 
 

@@ -107,7 +107,7 @@ S3_BUCKET=my-bucket S3_PREFIX=robustam python -m src.data.s3_sync
 ```
 
 > 매일 자동 실행: `.github/workflows/daily.yml`(KST 07:00 cron) →
-> collect→build→policy.zip 수신→precompute→S3 업로드.
+> collect→build→policy.zip 수신→precompute→백테스트 리포트→S3 업로드.
 > **S3 연결 활성 완료**(2026-07-19 실연결 검증) — 버킷 `robustam-teamkimfour`, 인증은 GitHub
 > OIDC(`vars.AWS_ROLE_ARN`)라 액세스 키가 필요 없다. 상세는 `docs/data_pipeline.md` §7·§8-2.
 
