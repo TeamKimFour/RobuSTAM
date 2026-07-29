@@ -52,4 +52,5 @@ services:
 databases:
   - name: robustam-mlflow-db
     plan: basic-256mb
+    region: singapore
     ipAllowList: []
