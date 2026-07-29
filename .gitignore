@@ -39,7 +39,6 @@ MANIFEST
 .env
 .env.*
 !.env.example
-!.env.prod.example
 *.pem
 *.crt
 *.key

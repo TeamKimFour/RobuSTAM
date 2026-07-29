@@ -405,7 +405,7 @@ python -m src.models.publish download    # 서빙 환경 (CI·EC2) — precomput
 
 ### 8-2. 서빙 컨테이너의 latest.json 수신 — S3 polling (PR #42 논의, 옵션 b)
 
-프로덕션 `docker-compose.prod.yml`의 `fastapi` 컨테이너는 호스트와 데이터 볼륨을 공유하지
+프로덕션(Render, `render.yaml`)의 `fastapi` 컨테이너는 호스트와 데이터 볼륨을 공유하지
 않는 stateless 구조다. `daily.yml` 배치(민지 담당)가 만든 `latest.json`을 받으려면 컨테이너가
 스스로 S3에서 내려받아야 한다.
 
