@@ -156,12 +156,58 @@ def test_verbose_returns_expected_keys_and_matches_scalar():
 
     d = calculate_reward_verbose(prev, new, r, transaction_cost_rate=c)
     assert set(d.keys()) == {
-        "portfolio_return", "log_return", "turnover", "transaction_cost", "reward",
+        "portfolio_return", "log_return", "turnover", "transaction_cost",
+        "vol_penalty", "reward",
     }
     assert d["reward"] == pytest.approx(calculate_reward(prev, new, r, c), abs=1e-12)
+    # κ 미지정(기본 0.0)이라 vol_penalty=0 → 기존 R = log_return − transaction_cost 그대로.
+    assert d["vol_penalty"] == 0.0
     assert d["log_return"] - d["transaction_cost"] == pytest.approx(d["reward"], abs=1e-12)
     assert d["turnover"] == pytest.approx(float(np.abs(new - prev).sum()), abs=1e-12)
     assert d["transaction_cost"] == pytest.approx(c * d["turnover"], abs=1e-12)
+
+
+# ── 위험조정 페널티 κ (이슈 #34 개선안 D) ──────────────────────────────
+
+def test_vol_penalty_default_off_preserves_reward():
+    """κ 미지정 시 기존 보상과 완전히 동일해야 한다(기본 0.0 = 셰이핑 없음)."""
+    prev = _shv_only()
+    new = _uniform()
+    r = np.array([0.01, -0.005, 0.002, 0.0, 0.0001], dtype=np.float64)
+    base = calculate_reward(prev, new, r, transaction_cost_rate=0.001)
+    # recent_vol을 줘도 κ=0이면 페널티가 붙지 않는다.
+    same = calculate_reward(prev, new, r, transaction_cost_rate=0.001, recent_vol=0.05)
+    assert same == pytest.approx(base, abs=1e-15)
+
+
+def test_vol_penalty_subtracts_kappa_times_sigma():
+    """R = (log − cost) − κ·σ_recent. κ·σ만큼 정확히 깎여야 한다."""
+    prev = _uniform()
+    new = _uniform()  # turnover=0 → 비용 0, 순수 페널티 효과만 본다
+    r = np.zeros(N)
+    kappa, sigma = 3.0, 0.02
+    d = calculate_reward_verbose(
+        prev, new, r, transaction_cost_rate=0.001,
+        vol_penalty_coef=kappa, recent_vol=sigma,
+    )
+    assert d["vol_penalty"] == pytest.approx(kappa * sigma, abs=1e-15)
+    assert d["reward"] == pytest.approx(
+        d["log_return"] - d["transaction_cost"] - kappa * sigma, abs=1e-15
+    )
+
+
+def test_vol_penalty_scales_linearly_with_kappa():
+    prev = _uniform()
+    new = _uniform()
+    r = np.zeros(N)
+    d1 = calculate_reward_verbose(prev, new, r, vol_penalty_coef=1.0, recent_vol=0.03)
+    d2 = calculate_reward_verbose(prev, new, r, vol_penalty_coef=4.0, recent_vol=0.03)
+    assert d2["vol_penalty"] == pytest.approx(4 * d1["vol_penalty"], rel=1e-12)
+
+
+def test_negative_vol_penalty_coef_raises():
+    with pytest.raises(ValueError, match="vol_penalty_coef"):
+        calculate_reward_verbose(_uniform(), _uniform(), np.zeros(N), vol_penalty_coef=-0.1)
 
 
 # ── verbose 경로도 동일한 검증을 강제 (env.step()의 실사용 경로) ─────────

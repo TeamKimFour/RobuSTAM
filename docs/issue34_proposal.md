@@ -286,6 +286,15 @@ A안(비용 가중치)은 이 축을 건드리지 않으므로 **A로 대체되�
 
 **작업량**: 작다. A안 실험 인프라(`lambda_sweep`)를 그대로 재사용할 수 있다.
 
+**구현 상태 (2026-07-29)**: 코드 통로 완료(`feat/risk-adjusted-reward`). 롤링 변동성 페널티
+방식으로 구현했다 — `reward.py`에 `vol_penalty_coef`(κ)·`recent_vol`(σ) 인자 추가,
+env가 `model.vol_penalty_window`(기본 20)로 **직전 스텝까지의** 포트폴리오 로그수익률
+표준편차를 롤링 계산해 전달(인과성 유지). `train.py`가 λ와 동일하게 **train split env에만**
+κ를 태우고, 평가·백테스트는 κ=0으로 측정 축을 보존한다. `config.model.vol_penalty_coef`
+기본 0.0이라 미설정 시 동작 불변. 테스트 `tests/test_vol_penalty.py`·`tests/test_reward.py`로
+계약(κ·σ 분리, 인과성, 기본값 보존, 음수·윈도우 검증) 박제. **κ 스윕 실측은 후속 작업**이며,
+λ 때와 같이 비중편차·회전율을 함께 감시한다.
+
 ---
 
 ### 3-1. PR #48(데이터 진단)과의 대조 — 회의의 핵심 논점

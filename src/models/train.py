@@ -66,20 +66,31 @@ def _to_tracking_uri(value: str) -> str:
 
 
 def load_fold_env(
-    cfg: dict, fold_id: int, split: str = "train", cost_multiplier: float = 1.0
+    cfg: dict,
+    fold_id: int,
+    split: str = "train",
+    cost_multiplier: float = 1.0,
+    vol_penalty_coef: float = 0.0,
 ) -> gym.Env:
     """지정 fold/split의 Feature Store 데이터를 읽어 PortfolioEnv를 만든다.
 
     SB3와 바로 호환되도록 `_BoundedActionWrapper`로 감싸 반환한다(action_bound는
     config `model.action_bound`, 기본 10).
 
-    `cost_multiplier`는 학습 보상에만 거는 거래비용 가중치 λ(이슈 #34 개선안 A)로,
-    **train split에만** 넘긴다. 기본 1.0이라 평가·백테스트 호출부는 실비용 그대로다.
+    `cost_multiplier`(λ, 개선안 A)와 `vol_penalty_coef`(κ, 개선안 D)는 모두 학습 보상에만
+    거는 셰이핑 장치라 **train split에만** 넘긴다. 기본값(1.0·0.0)이라 평가·백테스트
+    호출부는 실비용 그대로·페널티 없이 벤치마크와 같은 자로 측정된다.
     """
     out_dir = cfg["data"]["feature_store_dir"]
     state_df = fs.load_features(out_dir, fold_id, split)
     targets_df = fs.load_targets(out_dir, fold_id, split)
-    env = PortfolioEnv(state_df, targets_df, cfg, cost_multiplier=cost_multiplier)
+    env = PortfolioEnv(
+        state_df,
+        targets_df,
+        cfg,
+        cost_multiplier=cost_multiplier,
+        vol_penalty_coef=vol_penalty_coef,
+    )
     bound = float(cfg.get("model", {}).get("action_bound", 10.0))
     return _BoundedActionWrapper(env, bound=bound)
 
@@ -169,8 +180,17 @@ def train(
     # 개선안 A(보상 셰이핑, 이슈 #34): 학습 보상의 거래비용만 λ배로 키워 과매매를 벌한다.
     # 평가(evaluate)·백테스트는 λ를 받지 않으므로 실비용 0.1% 축을 그대로 유지한다.
     cost_multiplier = float(model_cfg.get("train_cost_multiplier", 1.0))
+    # 개선안 D(위험조정 보상, 이슈 #34): 최근 변동성 σ_recent에 κ를 걸어 흔들리는 경로를 벌한다.
+    # λ와 마찬가지로 학습 전용 — 평가·백테스트는 κ=0으로 성과 측정 축을 유지한다.
+    vol_penalty_coef = float(model_cfg.get("vol_penalty_coef", 0.0))
 
-    env = load_fold_env(cfg, fold_id, "train", cost_multiplier=cost_multiplier)
+    env = load_fold_env(
+        cfg,
+        fold_id,
+        "train",
+        cost_multiplier=cost_multiplier,
+        vol_penalty_coef=vol_penalty_coef,
+    )
 
     # 학습에 쓰는 Feature Store fold를 만든 build run_id를 provenance로 확보한다(이슈 #27).
     # 이 값이 있어야 추론(precompute)이 config.inference.scaler_run_id로 동일 정규화 통계를
@@ -196,6 +216,7 @@ def train(
                 "window": cfg["window"],
                 "transaction_cost": cfg["transaction_cost"],
                 "train_cost_multiplier": cost_multiplier,  # λ (이슈 #34 개선안 A, 학습 전용)
+                "vol_penalty_coef": vol_penalty_coef,  # κ (이슈 #34 개선안 D, 학습 전용)
                 "seed": seed,
             }
         )

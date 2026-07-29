@@ -38,7 +38,7 @@
 ### 3-1. 생성자 계약
 
 ```python
-env = PortfolioEnv(state_df, returns_df, cfg=None, cost_multiplier=1.0)
+env = PortfolioEnv(state_df, returns_df, cfg=None, cost_multiplier=1.0, vol_penalty_coef=0.0)
 ```
 
 | 인자 | 타입 | 계약 |
@@ -47,6 +47,7 @@ env = PortfolioEnv(state_df, returns_df, cfg=None, cost_multiplier=1.0)
 | `returns_df` | `pd.DataFrame` | 컬럼 = `[fwd_ret_SPY, fwd_ret_EWY, fwd_ret_TLT, fwd_ret_GLD, fwd_ret_SHV]`. 민지 [`feature_store.load_targets`](../src/data/feature_store.py) 출력. **로그수익률**. |
 | `cfg` | `dict \| None` | 생략 시 `config/config.yaml` 자동 로드. `assets`·`window`·`transaction_cost` 세 키 필수. |
 | `cost_multiplier` | `float` | 학습 보상에만 거는 거래비용 가중치 λ (이슈 #34 개선안 A). 기본 `1.0`(셰이핑 없음). 보상용 `c = c_real·λ`로만 쓰고 실비용 `c_real`은 보존한다. **train split env에만** 넘긴다 — 평가·백테스트는 1.0(성과 측정 축 보존). 0 이하면 `ValueError`. |
+| `vol_penalty_coef` | `float` | 위험조정 페널티 계수 κ (이슈 #34 개선안 D). 기본 `0.0`(페널티 없음). `R`에서 `κ·σ_recent`를 뺀다. σ_recent 윈도우는 `model.vol_penalty_window`(기본 20). **train split env에만** 넘긴다. 음수면 `ValueError`. |
 
 **입력 검증 (모두 `ValueError`)**
 1. `state_df` 컬럼 순서가 `schema.feature_names(W)`와 정확히 일치하지 않음
@@ -84,7 +85,8 @@ action(로짓)                       returns_df
     │                                   │
     └──────────┬────────────────────────┘
                ▼
-④ src.reward.calculate_reward_verbose(w_prev, w_new, r_arith, c)
+④ src.reward.calculate_reward_verbose(w_prev, w_new, r_arith,
+                                      c=c_real·λ, κ, σ_recent)   # λ·κ는 학습 전용
                │
                ▼
 ⑤ _current_weight = w_new;  _t += 1;  terminated = (_t >= len(state_df) − 1)
@@ -95,7 +97,8 @@ action(로짓)                       returns_df
 - **① Softmax**: `_softmax(logits) = exp(z − max(z)) / Σ exp(z − max(z))`. max 감산으로 수치안정. ∑w=1은 이 함수로 항상 성립하므로 정책이 어떤 로짓을 뱉든 계약이 깨지지 않는다.
 - **② `r_log`**: **`returns_df.iloc[self._t]`를 그대로** 조회. `fwd_ret[t] = log_ret[t+1]` 규약(민지 targets 저장 단계에서 이미 shift)이라 인덱스를 앞으로 밀지 **않는다** — 밀면 오히려 룩어헤드가 발생(과거 시점에서 미래 값을 이미 알고 있는 셈). 회귀 테스트 `test_env_robustness::test_each_step_uses_fwd_ret_at_current_index_only`가 이 규약을 박제.
 - **③ 로그→산술 변환 (선택지 α, 팀 회의 확정)**: 민지 targets는 로그수익률로 저장, 도현 `calculate_reward`는 산술수익률을 기대. 이 어댑터 책임을 env가 진다: `r_arith = np.expm1(r_log)`. 백테스트 엔진(`src/backtest/policy.py`)도 동일한 `expm1` 변환을 하므로 두 경로가 정확히 같은 비중·수익을 계산한다.
-- **④ 보상**: `src.reward.calculate_reward_verbose` 순수함수에 위임(`transaction_cost_rate=c=c_real·λ`). env는 값 검증(shape·∑w≈1)을 이 함수에 위임하고 반환 dict(`portfolio_return`·`log_return`·`turnover`·`transaction_cost`·`reward`)를 info로 흘려준다. **단 `info["cost"]`는 그대로가 아니라 실비용으로 재계산**한다: `cost = turnover × c_real`(λ 무관, 진단·집계가 실제 지출을 보게 함). 보상에 반영된 셰이핑 비용은 `shaped_cost`(=`transaction_cost`, λ 반영)로 별도 노출한다. λ=1이면 둘이 같아 기존 동작과 동일.
+- **④ 보상**: `src.reward.calculate_reward_verbose` 순수함수에 위임(`transaction_cost_rate=c=c_real·λ`). env는 값 검증(shape·∑w≈1)을 이 함수에 위임하고 반환 dict(`portfolio_return`·`log_return`·`turnover`·`transaction_cost`·`vol_penalty`·`reward`)를 info로 흘려준다. **단 `info["cost"]`는 그대로가 아니라 실비용으로 재계산**한다: `cost = turnover × c_real`(λ 무관, 진단·집계가 실제 지출을 보게 함). 보상에 반영된 셰이핑 비용은 `shaped_cost`(=`transaction_cost`, λ 반영)로, 최근 변동성은 `recent_vol`(σ_recent)로 별도 노출한다. λ=1·κ=0이면 기존 동작과 동일.
+- **④-1 위험조정 셰이핑 (κ, 개선안 D)**: `R = log_ret − λ·c·turnover − κ·σ_recent`의 κ 항. **κ**(`vol_penalty_coef`)는 최근 실현 변동성 σ_recent에 페널티를 건다. σ_recent는 env가 롤링 윈도우(`model.vol_penalty_window`)로 **직전 스텝까지의** 포트폴리오 로그수익률만 모아 계산한다(당일 수익률 포함 시 룩어헤드). κ=0이면 페널티 없음(기존 동작). λ와 마찬가지로 학습 전용이라 평가·백테스트는 받지 않아 측정 축이 유지된다. 상세: [`docs/issue34_proposal.md`](issue34_proposal.md) 개선안 A·D.
 - **⑤ 상태 업데이트**: 완전 리밸런싱 가정(기간 내 드리프트 무시, 백테스트 엔진과 동일 규약, `backtest_engine.md` §4).
 
 ### 3-5. `terminated` 판정
@@ -115,7 +118,10 @@ terminated = self._t >= len(self._state) - 1
 | `portfolio_return` | `float` | 산술 수익률 `Σ w_new · r_arith` (거래비용 차감 전) |
 | `log_return` | `float` | `ln(1 + portfolio_return)` (거래비용 차감 전) |
 | `turnover` | `float` | `Σ|w_new − w_prev|` (L1 회전율) |
-| `cost` | `float` | `c × turnover` |
+| `cost` | `float` | **실비용** `c_real × turnover` (λ 무관 — 진단·집계가 실제 지출을 보게 함) |
+| `shaped_cost` | `float` | 보상에 반영된 셰이핑 비용 `c_real·λ × turnover` (λ=1이면 `cost`와 같음) |
+| `recent_vol` | `float` | σ_recent — 직전 스텝까지 실현 로그수익률의 표준편차(개선안 D). 표본<2면 0.0 |
+| `vol_penalty` | `float` | `κ × recent_vol` (κ=0이면 0) |
 | `weights` | `np.ndarray(A,)` | 오늘 확정된 목표 비중(Softmax 결과, ∑=1). float32 사본. |
 
 MLflow 스텝 로깅·과매매 진단이 이 dict에서 읽는다.
@@ -185,6 +191,8 @@ env가 실제로 읽는 config 키만 정리(전체 스키마는 [config/config.
 | `transaction_cost` | `get_transaction_cost` | reward의 `c`. `cost = c × turnover`. | `0.001` (편도 0.1%) | 정책이 회전율에 얼마나 벌 받는지 결정. CLAUDE.md §2 확정. 민감도는 6주 실험 대상. |
 | `model.action_bound` | `train.py`가 소비 | env 자체엔 무해(action bound는 SB3 래핑에서만 사용) | `10.0` | 정책 로짓 범위. 너무 작으면 Softmax가 균등에 가까워져 학습 신호 약화, 너무 크면 극단 비중 진입해 회전율 폭발. |
 | `model.train_cost_multiplier` | `train.py`가 소비 | env 생성자 `cost_multiplier`(λ) 인자로 전달. 보상용 `c = c_real·λ`. **train split env에만** 넘긴다. | `1.0` | λ (개선안 A). 회전율 페널티 강도. 평가·백테스트는 항상 1.0(성과 측정 축 보존). 0 이하면 `ValueError`. |
+| `model.vol_penalty_coef` | `train.py`가 소비 | env 생성자 `vol_penalty_coef`(κ) 인자로 전달. **train split env에만** 넘긴다. 음수 거부. | `0.0` | κ (개선안 D). σ_recent 페널티 강도. 0=페널티 없음. 과하면 λ와 같은 붕괴(1/N 흉내) — 비중편차 감시. |
+| `model.vol_penalty_window` | env가 직접 소비 | σ_recent 롤링 윈도우 길이(스텝). `deque(maxlen=W_vol)`. 2 미만이면 `ValueError`. | `20` | κ 페널티의 변동성 측정 구간. 짧으면 노이즈에 민감, 길면 반응 느림. κ=0이면 무의미. |
 | `model.seed` | `train.py`가 소비 | env는 `super().reset(seed=seed)`로 numpy RNG 시드 설정. 현재 env 자체는 randomness 없음(deterministic). | `42` | 재현성. env 결과에 영향 없음. |
 
 env가 소비하지 **않는** 키(주의): `data.*` · `features.*` · `split.*` · `normalize.*`는 **Feature Store 빌드 시점**에만 소비되고 env는 이미 정규화·조립된 결과(`state_df`)만 받는다. env에서 이 값을 다시 읽지 말 것.
@@ -203,8 +211,10 @@ env가 위임하는 계약. 이 절은 env가 지켜야 하는 입력 규약을 
 | `new_weights` | `(A,)` | 비율(합=1) | 동일 |
 | `asset_returns` | `(A,)` | **산술수익률** (예: 1% = 0.01) | shape만 일치 확인 |
 | `transaction_cost_rate` | scalar | 소수(0.001 = 0.1%) | 기본값 `DEFAULT_TRANSACTION_COST_RATE=0.001` |
+| `vol_penalty_coef` | scalar | κ (개선안 D) | 기본 `0.0`. 음수면 `ValueError` |
+| `recent_vol` | scalar | σ_recent (env가 롤링 계산해 전달) | 기본 `0.0`. per-step 함수라 스칼라로 받아 κ만 곱함 |
 
-세 배열의 shape이 서로 다르면 `ValueError`. 세 함수 사용처가 정확히 같은 A를 쓴다는 계약(env·백테스트 엔진 모두 `config.assets` 길이).
+세 배열의 shape이 서로 다르면 `ValueError`. 세 함수 사용처가 정확히 같은 A를 쓴다는 계약(env·백테스트 엔진 모두 `config.assets` 길이). `vol_penalty_coef`·`recent_vol`은 스칼라 셰이핑 인자로, 기본값이면 보상식이 기존과 동일하다.
 
 ### 6-2. verbose vs. scalar 래퍼
 
@@ -270,3 +280,4 @@ env를 사용하는 모든 코드가 지켜야 하는 5개 불변식.
 |---|---|---|
 | v1.0 | 2026-07-27 | 최초 작성. 5주 정식 항목("환경 파라미터 정리"). PortfolioEnv·DiscretePortfolioEnv·reward 3개 모듈의 계약·하이퍼파라미터·불변식·함정을 SSOT로 정리. state_spec.md(State 차원)와 backtest_engine.md(회계 규약)를 참조하고 중복 서술은 피했다. |
 | v1.1 | 2026-07-29 | 학습 전용 거래비용 셰이핑 λ(이슈 #34 개선안 A) 반영: §3-1 생성자 표에 `cost_multiplier` 행·시그니처, §4 "④ 보상"에 `info["cost"]` 실비용 재계산·`shaped_cost` 추가, §5 표에 `model.train_cost_multiplier` 행. 보상식 `R = log_ret − λ·c·turnover`. λ=1에서 기존 동작 불변. |
+| v1.2 | 2026-07-30 | 위험조정 보상 κ(이슈 #34 개선안 D) 반영: §3-1에 `vol_penalty_coef` 행·시그니처, §4에 `vol_penalty`·`recent_vol`·④-1(κ 셰이핑) 추가, §5 표에 `model.vol_penalty_coef`·`vol_penalty_window` 행, §6 입력 계약에 `vol_penalty_coef`·`recent_vol`. 보상식 `R = log_ret − λ·c·turnover − κ·σ_recent`. κ=0에서 기존 동작 불변. |

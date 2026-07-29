@@ -83,6 +83,12 @@ model:
   # ⚠️ 평가(train.py evaluate)·백테스트(src/backtest)는 이 값을 쓰지 않는다 — 성과는 항상
   #    실비용 transaction_cost(편도 0.1%, CLAUDE.md §2)로만 측정한다.
   train_cost_multiplier: 1.0
+  # κ — 위험조정 페널티 계수 (이슈 #34 개선안 D, 위험조정 보상).
+  # R_train = log_return − λ·c·turnover − κ·σ_recent 로 흔들리는 경로를 벌한다.
+  # σ_recent는 최근 실현 포트폴리오 로그수익률의 표준편차(env가 vol_penalty_window로 롤링 계산).
+  # 0.0 = 페널티 없음(기본). λ와 마찬가지로 학습 전용이라 평가·백테스트는 κ=0으로 측정 축을 유지한다.
+  vol_penalty_coef: 0.0
+  vol_penalty_window: 20                # σ_recent 롤링 윈도우 길이(스텝). 2 이상.
   mlflow_tracking_uri: "mlruns"        # 로컬 파일 스토어 (CLAUDE.md 스택: MLflow)
   mlflow_experiment: "robustam-ppo"
   model_dir: "mlruns/models"           # 학습된 policy.zip 저장 위치
