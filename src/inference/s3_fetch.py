@@ -2,7 +2,7 @@
 
 daily.yml 배치(민지 담당, PR #42 코멘트 논의)가 s3://{bucket}/{prefix}/precompute/latest.json에
 업로드하면, 이 모듈이 그것을 로컬 `config.data.precompute_path`로 내려받는다. 프로덕션
-서빙 컨테이너는 호스트와 데이터 볼륨을 공유하지 않는 stateless 구조(docker-compose.prod.yml)라,
+서빙 컨테이너는 호스트와 데이터 볼륨을 공유하지 않는 stateless 구조(Render, render.yaml)라,
 기동 시 1회 + 주기적 재동기화로 스스로 데이터를 채운다.
 
 S3 키 계약: `{s3_prefix}/precompute/latest.json` — `src/data/s3_sync.py`가 쓰는 raw/feature_store와
