@@ -1,5 +1,10 @@
-# RobuSTAM 로컬 개발용 Docker Compose — fastapi
-# 실행: docker compose up --build
+# RobuSTAM 로컬 개발용 Docker Compose
+# 실행 예시:
+#   docker compose up --build fastapi   # 추론 API (포트 8000)
+#   docker compose up --build mlflow    # MLflow 트래킹 서버 (포트 5000, 팀 공용 Postgres 연결)
+#
+# mlflow 서비스는 .env 파일을 요구한다 (프로젝트 루트에 위치, .gitignore 처리됨).
+# DB URL·AWS 자격증명 값은 팀 vault를 통해 전달받아 채워야 한다.
 
 services:
   fastapi:
@@ -10,3 +15,13 @@ services:
       - "8000:8000"
     volumes:
       - ./config:/app/config:ro
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mlflow
+    image: robustam-mlflow:local
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
