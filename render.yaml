@@ -64,4 +64,8 @@ databases:
   - name: robustam-mlflow-db
     plan: basic-256mb
     region: singapore
-    ipAllowList: []
+    # 팀원 각자 로컬 도커에서 이 공용 DB로 접속해야 하므로 외부 IP 허용.
+    # 강력한 랜덤 패스워드로 접근 통제하고, 저장 내용은 학습 실험 메타데이터에 한정된다.
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: allow team local mlflow docker access
