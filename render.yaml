@@ -36,6 +36,17 @@ services:
     envVars:
       - key: PORT
         value: "5000"
+      # 자식 워커가 traceback을 stdout에 남기기 전에 죽는 것으로 보이는 문제를
+      # 진단하기 위한 값들. 원인 특정되면 PYTHONUNBUFFERED 외 두 값은 정리 대상.
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: MLFLOW_LOGGING_LEVEL
+        value: "DEBUG"
+      # glibc malloc arena 수를 CPU 코어 수만큼 늘리지 않도록 상한을 걸어
+      # Uvicorn/psycopg2 프로세스의 상주 메모리 단편화를 줄인다.
+      # (Free 플랜 RAM 512MB에서 OOM kill이 원인 후보인 상황)
+      - key: MALLOC_ARENA_MAX
+        value: "2"
       - key: S3_BUCKET
         value: robustam-teamkimfour
       - key: AWS_DEFAULT_REGION
