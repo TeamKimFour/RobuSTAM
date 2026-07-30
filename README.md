@@ -52,17 +52,38 @@ docker run --rm -v "$PWD/data:/app/data" robustam-pipeline src.data.build
 
 ## Docker Compose 실행 (로컬 개발)
 
+### FastAPI 추론 서버 (`fastapi`)
+
 FastAPI 추론 서버(현재는 헬스체크 placeholder, `src/api/` — 도현 실제 코드로 교체 예정)를
 로컬에서 띄운다.
 
 ```bash
-docker compose up --build
+docker compose up --build fastapi
 ```
 
 - FastAPI: `http://localhost:8000/health` → `{"status": "ok"}` 응답 확인
 
 프로덕션 배포는 Render Blueprint(`render.yaml`)로 대체됨 — nginx self-signed HTTPS,
 Cloudflare Tunnel 방식은 더 이상 쓰지 않음 (Render가 HTTPS/도메인 자동 처리).
+
+### MLflow 트래킹 서버 (`mlflow`)
+
+팀 공용 Render Postgres에 붙는 로컬 MLflow 서버. 팀원 각자 로컬에서 이 서비스를 띄우면
+동일한 DB를 공유하므로 서로 experiment·run을 볼 수 있다.
+
+**사전 준비**: `.env.example`을 `.env`로 복사한 뒤 팀 vault에서 받은 `DATABASE_URL`·
+`AWS_*`·`S3_BUCKET` 값을 채운다. `DATABASE_URL`을 비우면 컨테이너가 SQLite로
+조용히 폴백되어 팀 공용 DB에 안 붙으니 주의.
+
+```bash
+docker compose up --build -d mlflow
+```
+
+- MLflow UI: `http://localhost:5000`
+- 학습 스크립트에서: `MLFLOW_TRACKING_URI=http://localhost:5000`
+
+Render 위에 상시 배포된 MLflow 웹 서비스는 Free 512MB OOM으로 접었고(관련 논의는
+PR #66 참조), 팀 공용 저장 계층(Postgres·S3)만 재활용한다.
 
 ## S3 업로드 (선택 — 클라우드 공유)
 
