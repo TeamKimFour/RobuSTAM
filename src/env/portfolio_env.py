@@ -28,6 +28,8 @@ verbose 버전을 쓰는 것은 스텝별 중간값(portfolio_return·turnover·
 
 from __future__ import annotations
 
+from collections import deque
+
 import gymnasium as gym
 import numpy as np
 import pandas as pd
@@ -66,6 +68,11 @@ class PortfolioEnv(gym.Env):
         평가·백테스트는 반드시 1.0(=`config.transaction_cost` 원값)을 유지해야 한다 —
         CLAUDE.md §2의 "편도 0.1%" 원칙은 성과 측정 축에 대한 것이므로, 여기를 건드리면
         벤치마크와 다른 자로 재는 셈이 된다.
+    vol_penalty_coef : 위험조정 페널티 계수 κ (기본 0.0 = 페널티 없음, 이슈 #34 개선안 D).
+        `R = log_ret − λ·c·turnover − κ·σ_recent`의 κ. σ_recent는 최근 실현 포트폴리오
+        로그수익률의 표준편차로, env가 롤링 윈도우(`model.vol_penalty_window`, 기본 20)로
+        **직전 스텝까지의 값만** 모아 계산한다(인과성 유지 — 이번 스텝 수익률은 아직 미포함).
+        λ와 직교하는 **학습 전용 셰이핑**이며, 성과 측정 축은 건드리지 않는다. 음수는 거부한다.
     """
 
     metadata = {"render_modes": []}
@@ -76,6 +83,7 @@ class PortfolioEnv(gym.Env):
         returns_df: pd.DataFrame,
         cfg: dict | None = None,
         cost_multiplier: float = 1.0,
+        vol_penalty_coef: float = 0.0,
     ) -> None:
         super().__init__()
         self.cfg = cfg if cfg is not None else load_config()
@@ -89,6 +97,17 @@ class PortfolioEnv(gym.Env):
         # 실비용 c_real은 그대로 보존하고, 보상에 쓰는 비율만 λ배 한다.
         self.c_real = get_transaction_cost(self.cfg)
         self.c = self.c_real * self.cost_multiplier
+
+        # 위험조정 페널티 κ (이슈 #34 개선안 D). 0.0이면 페널티 없음 = 기존 동작.
+        if vol_penalty_coef < 0:
+            raise ValueError(f"vol_penalty_coef(κ)는 음수일 수 없습니다: {vol_penalty_coef}")
+        self.vol_penalty_coef = float(vol_penalty_coef)
+        model_cfg = self.cfg.get("model", {}) if isinstance(self.cfg, dict) else {}
+        self.vol_penalty_window = int(model_cfg.get("vol_penalty_window", 20))
+        if self.vol_penalty_window < 2:
+            raise ValueError(
+                f"vol_penalty_window는 2 이상이어야 합니다: {self.vol_penalty_window}"
+            )
 
         expected_state_cols = schema.feature_names(self.W)
         if list(state_df.columns) != expected_state_cols:
@@ -128,6 +147,8 @@ class PortfolioEnv(gym.Env):
 
         self._t: int = 0
         self._current_weight = np.zeros(self.n_assets, dtype=np.float64)
+        # 최근 실현 포트폴리오 로그수익률 버퍼(σ_recent 산출용, 개선안 D). reset에서 비운다.
+        self._return_history: deque[float] = deque(maxlen=self.vol_penalty_window)
 
     def reset(
         self,
@@ -140,6 +161,7 @@ class PortfolioEnv(gym.Env):
         # 초기 비중: SHV(현금성) 100% — 무위험 상태 출발 (팀 회의 확정 옵션 a)
         self._current_weight = np.zeros(self.n_assets, dtype=np.float64)
         self._current_weight[self.assets.index("SHV")] = 1.0
+        self._return_history.clear()
         return self._obs(), {}
 
     def step(
@@ -164,17 +186,27 @@ class PortfolioEnv(gym.Env):
         # 3) 선택지 α: 로그수익률 → 산술수익률 (도현 calculate_reward 계약)
         r_arith = np.expm1(r_log)
 
-        # 4) 보상 계산은 src.reward 모듈에 위임 (env와 reward 분리 — 팀 회의 확정)
+        # 4) σ_recent = 직전 스텝까지 실현된 포트폴리오 로그수익률의 표준편차(개선안 D).
+        #    이번 스텝 수익률은 아직 안 넣는다 — 행동 시점에 알 수 없는 값이라 인과성 위반이 된다.
+        #    표본이 2개 미만이면 표준편차가 정의되지 않으므로 0.0(에피소드 초반 페널티 면제).
+        recent_vol = (
+            float(np.std(self._return_history)) if len(self._return_history) >= 2 else 0.0
+        )
+
+        # 5) 보상 계산은 src.reward 모듈에 위임 (env와 reward 분리 — 팀 회의 확정)
         detail = calculate_reward_verbose(
             prev_weights=w_prev,
             new_weights=w_new,
             asset_returns=r_arith,
             transaction_cost_rate=self.c,
+            vol_penalty_coef=self.vol_penalty_coef,
+            recent_vol=recent_vol,
         )
         reward = detail["reward"]
 
-        # 5) 상태 업데이트 (완전 리밸런싱 가정) + 시간 인덱스 진행
+        # 6) 상태 업데이트 (완전 리밸런싱 가정) + 시간 인덱스 진행
         self._current_weight = w_new
+        self._return_history.append(detail["log_return"])
         self._t += 1
 
         terminated = self._t >= len(self._state) - 1
@@ -187,6 +219,8 @@ class PortfolioEnv(gym.Env):
             "turnover": detail["turnover"],
             "cost": detail["turnover"] * self.c_real,
             "shaped_cost": detail["transaction_cost"],
+            "recent_vol": recent_vol,
+            "vol_penalty": detail["vol_penalty"],
             "weights": w_new.astype(np.float32).copy(),
         }
         return self._obs(), reward, terminated, False, info
