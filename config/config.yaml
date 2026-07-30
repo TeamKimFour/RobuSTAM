@@ -78,6 +78,11 @@ model:
   total_timesteps: 200000
   seed: 42
   action_bound: 10.0                   # SB3용 유한 bound (env 자체는 -inf~+inf 로짓, train.py가 래핑)
+  # λ — 학습 보상에만 거는 거래비용 가중치 (이슈 #34 개선안 A, 보상 셰이핑).
+  # R_train = log_return − λ·c·turnover 로 과매매를 더 세게 벌한다. 1.0 = 셰이핑 없음(기본).
+  # ⚠️ 평가(train.py evaluate)·백테스트(src/backtest)는 이 값을 쓰지 않는다 — 성과는 항상
+  #    실비용 transaction_cost(편도 0.1%, CLAUDE.md §2)로만 측정한다.
+  train_cost_multiplier: 1.0
   mlflow_tracking_uri: "mlruns"        # 로컬 파일 스토어 (CLAUDE.md 스택: MLflow)
   mlflow_experiment: "robustam-ppo"
   model_dir: "mlruns/models"           # 학습된 policy.zip 저장 위치
