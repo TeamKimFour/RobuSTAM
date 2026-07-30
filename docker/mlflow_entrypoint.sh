@@ -9,8 +9,13 @@ set -e
 
 FIXED_DATABASE_URL=$(echo "$DATABASE_URL" | sed 's#^postgres://#postgresql://#')
 
+# --allowed-hosts "*"·--cors-allowed-origins "*"는 Render 지원팀이 진단용으로 제안한
+# 임시값이다(전체 허용, 배포 전 필수 아님). 문제가 실제로 이걸로 해결되는지 확인되면
+# 다음 커밋에서 "*.onrender.com" 등으로 좁힐 예정 — 이 값 그대로 프로덕션에 두지 말 것.
 exec mlflow server \
     --host 0.0.0.0 \
     --port "${PORT:-5000}" \
     --backend-store-uri "$FIXED_DATABASE_URL" \
-    --artifacts-destination "s3://${S3_BUCKET}/mlflow-artifacts"
+    --artifacts-destination "s3://${S3_BUCKET}/mlflow-artifacts" \
+    --allowed-hosts "*" \
+    --cors-allowed-origins "*"
