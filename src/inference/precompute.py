@@ -29,6 +29,8 @@ import numpy as np
 
 from src.config_loader import (
     get_inference,
+    get_n_asset_features,
+    get_n_market_features,
     get_precompute_path,
     get_window,
     load_config,
@@ -127,10 +129,16 @@ def build_today_obs(
     obs = scaler.transform(raw_today).iloc[0].to_numpy(dtype=np.float32)
 
     # 3) prev_weight 주입 — raw 비중(정규화 안 함). None이면 SHV 100%.
+    #    지표 개수가 config로 가변이므로 K_a·K_m을 함께 넘겨 슬라이스를 계산한다.
     pw = np.asarray(prev_weights, dtype=float) if prev_weights is not None else _cold_start_weights()
     if pw.shape != (schema.N_ASSETS,):
         raise ValueError(f"prev_weights는 shape ({schema.N_ASSETS},)여야 합니다: {pw.shape}")
-    obs[schema.prev_weight_slice(W)] = pw.astype(np.float32)
+    pw_slice = schema.prev_weight_slice(
+        W,
+        n_asset_features=get_n_asset_features(cfg),
+        n_market_features=get_n_market_features(cfg),
+    )
+    obs[pw_slice] = pw.astype(np.float32)
     return obs, date
 
 
