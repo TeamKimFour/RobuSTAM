@@ -49,6 +49,11 @@ D = (A × W) + (K_asset × A) + K_market + A
 
 **W 변경 시 자동 산출:** `W=20 → 137`, `W=30 → 187`, `W=60 → 337`
 
+**K_asset·K_market 변형 지원 (v1.1):** 지표 개수가 바뀌어도 코드는 config만 보고 D를 산출한다.
+예) `W=30`에서 `K_asset=2, K_market=1 → D=166`, `K_asset=3, K_market=1 → D=171`,
+`K_asset=3, K_market=2 → D=172`. 검증은 `tests/test_variable_state_dim.py`가 파라메트라이즈로
+env·모델 왕복 계약을 확인한다.
+
 ---
 
 ## 3. 인덱스 맵 (구현 기준)
@@ -132,6 +137,10 @@ observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(state_dim,), dty
 - **결정:** `187`을 코드에 직접 박지 않고 `config`의 `W`에서 산출(§4 스니펫). **기본값 `W=30`.**
 - 이유: 20/60일 비교 실험 시 차원이 자동 변경되어야 하며, Feature Store 출력 차원과
   환경 기대 차원이 항상 일치해야 학습이 시작됨.
+- **v1.1 확장:** `K_asset`(config.features.asset 길이)·`K_market`(config.features.market 길이)도
+  같은 원칙으로 config에서 온다. 민지 Feature Store가 지표 셋을 바꿔도 `schema.state_dim`·
+  `schema.prev_weight_slice`·`schema.feature_names`가 그 개수를 인자로 받아 슬라이스를
+  재계산하므로 env/추론 파이프라인이 자동으로 새 D를 소비한다.
 
 ---
 
@@ -140,3 +149,4 @@ observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(state_dim,), dty
 | 버전 | 날짜 | 내용 |
 |---|---|---|
 | v1.0 | 2026-06-28 | 최초 작성. 187 권장안 확정, 부속결정 ①②③ 명시. |
+| v1.1 | 2026-08-05 | K_asset·K_market도 config에서 산출. schema 헬퍼가 인자를 받아 D 가변 지원(D=166/171/172 검증). |

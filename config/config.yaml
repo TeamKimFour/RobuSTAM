@@ -7,7 +7,10 @@
 assets: ["SPY", "EWY", "TLT", "GLD", "SHV"]
 
 # ── State 차원 산출용 핵심 하이퍼파라미터 ──
-window: 30              # W — 로그수익률 history 윈도우. state_dim = (5×W)+37 → 187 (하드코딩 금지)
+# state_dim = (A×W) + (K_asset×A) + K_market + A. A=자산수, W·K는 아래에서 온다.
+# 카논(K_asset=6, K_market=2)에서 W=30 → 187. 지표 셋이 바뀌면 아래 features 리스트
+# 길이만 조정하면 config_loader.get_state_dim이 자동 반영한다(D=166/171/172 등).
+window: 30              # W — 로그수익률 history 윈도우. 하드코딩 금지
 
 # ── 거래비용 (env·backtest 공용) ──
 transaction_cost: 0.001  # 편도 0.1% (CLAUDE.md §2 확정값)

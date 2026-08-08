@@ -1,7 +1,8 @@
-"""187차원 State 행렬 조립.
+"""State 행렬 조립 (기본 187차원, config로 D 가변).
 
 수익률 윈도우 + 자산 지표 + 시장 지표 + 직전비중(0) 을 schema 인덱스맵 위치에 배치해
-wide DataFrame(컬럼 = schema.feature_names(W))을 만든다. 정규화는 여기서 하지 않는다(normalize 단계).
+wide DataFrame(컬럼 = schema.feature_names(W, cfg features))을 만든다.
+정규화는 여기서 하지 않는다(normalize 단계).
 
 룩어헤드: 수익률 윈도우는 t 포함·t+1 미포함(returns.return_window와 동일 원리, shift로 벡터화).
 조립 대상 날짜는 "W일 윈도우가 가능하고 지표도 존재하는 날"의 교집합.
@@ -9,7 +10,7 @@ wide DataFrame(컬럼 = schema.feature_names(W))을 만든다. 정규화는 여�
 
 import pandas as pd
 
-from src.config_loader import get_window
+from src.config_loader import get_asset_features, get_market_features, get_window
 from src.data import schema
 
 
@@ -19,15 +20,21 @@ def assemble_state_matrix(
     market_feat: pd.DataFrame,
     cfg: dict,
 ) -> pd.DataFrame:
-    """187차원 wide State 행렬을 조립한다.
+    """State wide 행렬을 조립한다. 차원은 config.features 길이에서 산출된다.
 
     log_ret    : 전체 로그수익률 (index=date, 컬럼=자산)
-    asset_feat : 자산 지표 30컬럼 (warm-up drop됨, 컬럼=feat_{asset}_{name})
-    market_feat: 시장 지표 2컬럼 (mkt_{name})
-    반환: index=조립가능일, 컬럼=feature_names(W) 순서, prev_weight 블록은 0.
+    asset_feat : 자산 지표 (warm-up drop됨, 컬럼=feat_{asset}_{name})
+    market_feat: 시장 지표 (컬럼=mkt_{name})
+    반환: index=조립가능일, 컬럼=feature_names(W, cfg features) 순서, prev_weight 블록은 0.
     """
     W = get_window(cfg)
-    names = schema.feature_names(W)
+    asset_features = get_asset_features(cfg)
+    market_features = get_market_features(cfg)
+    names = schema.feature_names(
+        W,
+        asset_features=asset_features,
+        market_features=market_features,
+    )
 
     # 조립 가능일: 지표가 있고(warm-up 후) + 앞으로 W일 윈도우가 확보되는 날
     pos = pd.Series(range(len(log_ret.index)), index=log_ret.index)

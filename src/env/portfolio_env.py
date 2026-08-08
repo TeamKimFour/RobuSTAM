@@ -36,7 +36,9 @@ import pandas as pd
 from gymnasium import spaces
 
 from src.config_loader import (
+    get_asset_features,
     get_assets,
+    get_market_features,
     get_state_dim,
     get_transaction_cost,
     get_window,
@@ -90,6 +92,12 @@ class PortfolioEnv(gym.Env):
         self.W = get_window(self.cfg)
         self.assets = get_assets(self.cfg)
         self.n_assets = len(self.assets)
+        # 지표 개수는 config.features에서 받아 187 고정이 아닌 가변 D를 지원한다
+        # (민지 Feature Store 스키마 변형: D=166/171/172 등에서 그대로 소비).
+        self.asset_features = get_asset_features(self.cfg)
+        self.market_features = get_market_features(self.cfg)
+        self.n_asset_features = len(self.asset_features)
+        self.n_market_features = len(self.market_features)
         self.state_dim = get_state_dim(self.cfg)
         if cost_multiplier <= 0:
             raise ValueError(f"cost_multiplier는 양수여야 합니다: {cost_multiplier}")
@@ -109,10 +117,14 @@ class PortfolioEnv(gym.Env):
                 f"vol_penalty_window는 2 이상이어야 합니다: {self.vol_penalty_window}"
             )
 
-        expected_state_cols = schema.feature_names(self.W)
+        expected_state_cols = schema.feature_names(
+            self.W,
+            asset_features=self.asset_features,
+            market_features=self.market_features,
+        )
         if list(state_df.columns) != expected_state_cols:
             raise ValueError(
-                "state_df 컬럼이 schema.feature_names(W)와 일치하지 않습니다. "
+                "state_df 컬럼이 schema.feature_names(W, features…)와 일치하지 않습니다. "
                 "src.data.assemble.assemble_state_matrix 출력을 사용하세요."
             )
 
@@ -130,7 +142,11 @@ class PortfolioEnv(gym.Env):
         self._state = state_df.reset_index(drop=True)
         # 민지 targets은 로그수익률(선택지 α: 여기서 산술수익률로 변환해 도현에 넘김)
         self._log_returns = returns_df.reset_index(drop=True).to_numpy(dtype=np.float64)
-        self._prev_weight_slice = schema.prev_weight_slice(self.W)
+        self._prev_weight_slice = schema.prev_weight_slice(
+            self.W,
+            n_asset_features=self.n_asset_features,
+            n_market_features=self.n_market_features,
+        )
 
         self.observation_space = spaces.Box(
             low=-np.inf,
