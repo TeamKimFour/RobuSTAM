@@ -87,6 +87,28 @@ def test_init_idempotent(tmp_path):
     fs.init_meta_db(db)  # 재호출해도 에러 없어야 함
 
 
+def test_init_migrates_legacy_runs_table_without_combo_column(tmp_path):
+    """콤보 시스템 이전(v0.19 이하) meta.sqlite도 init_meta_db 재호출로 combo 컬럼을 받아야 한다.
+
+    CREATE TABLE IF NOT EXISTS는 기존 테이블을 안 건드리므로, 구버전 6컬럼 runs 테이블에
+    write_run이 7번째 값(combo)을 넣으려다 'table runs has 6 columns but 7 values were
+    supplied'로 깨지는 걸 막는 마이그레이션 회귀 테스트.
+    """
+    import sqlite3
+
+    db = str(tmp_path / "meta.sqlite")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """CREATE TABLE runs (
+                run_id TEXT PRIMARY KEY, created_at TEXT, config_hash TEXT,
+                window_w INTEGER, state_dim INTEGER, asset_order TEXT
+            )"""
+        )  # 구버전 6컬럼 스키마 재현
+
+    fs.init_meta_db(db)  # 마이그레이션 수행돼야 함
+    fs.write_run(db, "run1", "2026-08-09T00:00:00", "abc123", 30, 187, list(s.ASSETS), combo="full")
+
+
 # ── build run_id provenance (이슈 #27) ──
 def _write_run_with_fold(db, run_id, created_at, fold_id):
     fs.write_run(db, run_id, created_at, "abc123", 30, s.state_dim(30), list(s.ASSETS))
