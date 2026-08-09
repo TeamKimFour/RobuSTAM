@@ -29,6 +29,7 @@ FWD_RET_COLS = [f"fwd_ret_{a}" for a in ASSETS]
 # (D, K_asset, K_market) — 모두 W=30 기준.
 # 5·30 + 5·K_asset + K_market + 5 = D 를 만족한다.
 VARIANTS = [
+    pytest.param(156, 0, 1, id="D=156 (K_asset=0, K_market=1) — M0, PR #69 리뷰"),
     pytest.param(166, 2, 1, id="D=166 (K_asset=2, K_market=1)"),
     pytest.param(171, 3, 1, id="D=171 (K_asset=3, K_market=1)"),
     pytest.param(172, 3, 2, id="D=172 (K_asset=3, K_market=2)"),
