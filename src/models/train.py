@@ -16,6 +16,7 @@ Feature Store의 특정 fold train split을 PortfolioEnv에 태워 Stable-Baseli
     python -m src.models.train                              # config 기본 fold·timesteps·seed
     python -m src.models.train --fold-id 1 --total-timesteps 500000
     python -m src.models.train --fold-id 1 --seed 7         # 같은 fold의 배포 후보 추가
+    python -m src.models.train --combo M1 --fold-id 1       # 피처 콤보 M1으로 학습
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from src.config_loader import load_config
+from src.config_loader import get_active_combo, get_state_dim, load_config_for_combo
 from src.data import feature_store as fs
 from src.env.portfolio_env import PortfolioEnv
 
@@ -150,8 +151,20 @@ def train(
     fold_id: int | None = None,
     total_timesteps: int | None = None,
     seed: int | None = None,
+    combo: str | None = None,
+    cost_multiplier: float | None = None,
+    vol_penalty_coef: float | None = None,
 ) -> dict:
-    """PPO를 학습하고 MLflow에 기록한다. {run_id, model_path, ...평가지표} 반환."""
+    """PPO를 학습하고 MLflow에 기록한다. {run_id, model_path, ...평가지표} 반환.
+
+    combo: 피처 콤보 이름(M0~M3 등). 생략 시 config의 `active_combo`(기본 `full`, 187차원)라
+    기존 동작과 동일하다. 지정하면 그 콤보의 Feature Store(`data/feature_store/<combo>/`)를
+    읽고 State 차원도 그 콤보 것으로 바뀐다(docs/data_pipeline.md §3-2).
+
+    cost_multiplier(λ)·vol_penalty_coef(κ): 생략 시 config `model` 값. 여러 콤보를 같은
+    조건으로 돌리는 실험 러너(experiment.py)가 config 파일을 건드리지 않고 동일 값을
+    주입할 수 있도록 인자로도 연다 — seed·total_timesteps와 같은 오버라이드 규약이다.
+    """
     # mlflow-skinny 3.14+에서 순수 파일 트래킹 스토어("mlruns/")가 기본 비활성(유지보수
     # 모드)이라 명시적으로 허용한다. DB 백엔드(sqlite:///...)로 옮기기 전까지의 임시 조치.
     os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
@@ -159,7 +172,10 @@ def train(
     import mlflow
     from stable_baselines3 import PPO
 
-    cfg = load_config(config_path)
+    # 콤보를 반영한 cfg — features(→state_dim)와 data 경로가 모두 그 콤보 것으로 바뀐다.
+    # 이후 load_fold_env·evaluate·PortfolioEnv는 콤보를 몰라도 올바른 Feature Store를 읽는다.
+    cfg = load_config_for_combo(config_path, combo)
+    combo_name = get_active_combo(cfg, combo)
     model_cfg = cfg.get("model", {})
 
     algorithm = model_cfg.get("algorithm", "PPO")
@@ -179,10 +195,16 @@ def train(
 
     # 개선안 A(보상 셰이핑, 이슈 #34): 학습 보상의 거래비용만 λ배로 키워 과매매를 벌한다.
     # 평가(evaluate)·백테스트는 λ를 받지 않으므로 실비용 0.1% 축을 그대로 유지한다.
-    cost_multiplier = float(model_cfg.get("train_cost_multiplier", 1.0))
+    cost_multiplier = float(
+        cost_multiplier if cost_multiplier is not None
+        else model_cfg.get("train_cost_multiplier", 1.0)
+    )
     # 개선안 D(위험조정 보상, 이슈 #34): 최근 변동성 σ_recent에 κ를 걸어 흔들리는 경로를 벌한다.
     # λ와 마찬가지로 학습 전용 — 평가·백테스트는 κ=0으로 성과 측정 축을 유지한다.
-    vol_penalty_coef = float(model_cfg.get("vol_penalty_coef", 0.0))
+    vol_penalty_coef = float(
+        vol_penalty_coef if vol_penalty_coef is not None
+        else model_cfg.get("vol_penalty_coef", 0.0)
+    )
 
     env = load_fold_env(
         cfg,
@@ -195,6 +217,7 @@ def train(
     # 학습에 쓰는 Feature Store fold를 만든 build run_id를 provenance로 확보한다(이슈 #27).
     # 이 값이 있어야 추론(precompute)이 config.inference.scaler_run_id로 동일 정규화 통계를
     # 재현할 수 있다. 미상(빌드 전 등)이면 "nofs"로 남겨 나중에 추적 불가함을 드러낸다.
+    # meta_db도 콤보별로 갈린다(load_config_for_combo가 이미 반영) — 그 콤보의 build만 본다.
     meta_db = cfg.get("data", {}).get("meta_db")
     fs_run_id = fs.latest_run_id_for_fold(meta_db, fold_id) if meta_db else None
     fs_tag = fs_run_id or "nofs"
@@ -212,6 +235,10 @@ def train(
                 "policy": policy,
                 "fold_id": fold_id,
                 "feature_store_run_id": fs_tag,  # 정규화 재현 출처(config.inference.scaler_run_id에 복사)
+                # 어느 피처 콤보로 학습됐는지 — 조합 비교 실험(experiment.py)의 그룹 키다.
+                # 스크리닝 run(screen_combos.py)의 feature_set과 같은 이름 규약을 쓴다.
+                "feature_set": combo_name or "full",
+                "state_dim": get_state_dim(cfg),
                 "total_timesteps": total_timesteps,
                 "window": cfg["window"],
                 "transaction_cost": cfg["transaction_cost"],
@@ -236,8 +263,11 @@ def train(
         model = PPO(policy, env, **ppo_kwargs)
         model.learn(total_timesteps=total_timesteps)
 
-        # 파일명에 build run_id를 박아, 어느 정규화 통계로 학습됐는지 파일만 봐도 알 수 있게 한다.
-        model_path = model_dir / f"ppo_fold{fold_id}_{fs_tag}_{run.info.run_id}.zip"
+        # 파일명에 콤보와 build run_id를 박아, 어느 피처셋·정규화 통계로 학습됐는지
+        # 파일만 봐도 알 수 있게 한다(콤보별 policy를 한 디렉토리에 섞어둬도 구분됨).
+        model_path = (
+            model_dir / f"ppo_{combo_name or 'full'}_fold{fold_id}_{fs_tag}_{run.info.run_id}.zip"
+        )
         model.save(str(model_path))
         mlflow.log_artifact(str(model_path))
 
@@ -249,6 +279,8 @@ def train(
             "model_path": str(model_path),
             "fold_id": fold_id,
             "seed": seed,
+            "feature_set": combo_name or "full",
+            "state_dim": get_state_dim(cfg),
             "feature_store_run_id": fs_run_id,  # 배포 시 config.inference.scaler_run_id에 넣을 값
         }
         result.update(metrics)
@@ -263,6 +295,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--seed", type=int, default=None, help="config model.seed 오버라이드(배포 후보 늘리기용)"
     )
+    parser.add_argument(
+        "--combo", default=None, help="피처 콤보(M0~M3). 생략 시 config의 active_combo"
+    )
     return parser.parse_args()
 
 
@@ -273,6 +308,7 @@ if __name__ == "__main__":
         fold_id=args.fold_id,
         total_timesteps=args.total_timesteps,
         seed=args.seed,
+        combo=args.combo,
     )
     print(result)
     # 배포용 안내: 이 policy를 서빙하려면 config.inference를 아래 값으로 채운다(이슈 #27).

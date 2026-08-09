@@ -195,6 +195,41 @@ def get_meta_db(cfg: dict, combo: str | None = None) -> str:
     return str(p.parent / name / p.name)
 
 
+def load_config_for_combo(path: str = DEFAULT_CONFIG_PATH, combo: str | None = None) -> dict:
+    """config를 읽어 콤보를 반영한 dict를 반환한다 — 학습·백테스트 진입점용.
+
+    `resolve_combo`가 `features`(지표 리스트 → state_dim)를 바꾸는 데 더해, 이 함수는
+    `data.feature_store_dir`·`data.meta_db`까지 **그 콤보의 것으로 갈아끼운다.** 그래서
+    하위 모듈(PortfolioEnv·load_fold_env·run_policy_on_fold·feature_store)은 콤보라는
+    개념을 몰라도 되고, `cfg["data"]["feature_store_dir"]`를 읽던 기존 코드가 그대로
+    올바른 콤보의 Feature Store를 읽는다.
+
+    combo 생략 시 `active_combo`(기본 `full`)라 기존 동작과 완전히 동일하다.
+    """
+    return resolve_paths_for_combo(load_config(path), combo)
+
+
+def resolve_paths_for_combo(cfg: dict, combo: str | None = None) -> dict:
+    """이미 읽어둔 cfg에 콤보를 반영한다(`load_config_for_combo`의 dict 버전).
+
+    원본 cfg는 변경하지 않는다 — `data`도 새 dict로 복사한 뒤 경로만 덮어쓴다.
+    """
+    resolved = resolve_combo(cfg, combo)
+    resolved["data"] = {
+        **cfg.get("data", {}),
+        "feature_store_dir": get_feature_store_dir(cfg, combo),
+        "meta_db": get_meta_db(cfg, combo),
+    }
+    return resolved
+
+
+def get_active_combo(cfg: dict, combo: str | None = None) -> str | None:
+    """이 cfg가 실제로 소비하는 콤보 이름(로깅·provenance용). 콤보 시스템이 없으면 None."""
+    if cfg.get("feature_combos") is None:
+        return None
+    return combo if combo is not None else cfg.get("active_combo")
+
+
 def get_state_dim(cfg: dict) -> int:
     """config의 W·자산수·지표 개수에서 State 차원을 산출한다.
 

@@ -27,7 +27,13 @@ from src.backtest import benchmark as bm
 from src.backtest.engine import BacktestEngine
 from src.backtest.policy import run_policy_on_fold, summarize, targets_to_price_returns
 from src.backtest.s3_results import save_results_to_s3
-from src.config_loader import DEFAULT_CONFIG_PATH, get_assets, get_inference, load_config
+from src.config_loader import (
+    DEFAULT_CONFIG_PATH,
+    get_assets,
+    get_inference,
+    load_config,
+    resolve_paths_for_combo,
+)
 
 # CLAUDE.md §1 정량 목표 — policy가 벤치마크 대비 둘 중 하나를 만족하면 "달성"으로 판정한다.
 SHARPE_IMPROVEMENT_TARGET = 0.15
@@ -42,8 +48,15 @@ def _fold_ids(cfg: dict) -> list[int]:
     return list(range(1, len(cfg["split"]["test_blocks"]) + 1))
 
 
-def _run_id(fold_id: int, strategy_key: str) -> str:
-    return f"fold{fold_id}_{strategy_key}"
+def _run_id(fold_id: int, strategy_key: str, combo: str | None = None) -> str:
+    """S3 run_id. 콤보를 쓰면 접두어를 붙여 콤보끼리 결과를 덮어쓰지 않게 한다.
+
+    `full`(기본 콤보)·None은 기존 `fold{N}_{key}` 규칙 그대로 — 프론트·export.py가
+    기대하는 키를 바꾸지 않는다(get_feature_store_dir와 동일한 하위호환 규칙).
+    """
+    if combo in (None, "full"):
+        return f"fold{fold_id}_{strategy_key}"
+    return f"{combo}_fold{fold_id}_{strategy_key}"
 
 
 def _compare_to_benchmarks(strategies: dict[str, dict]) -> dict[str, dict]:
@@ -82,8 +95,13 @@ def run_fold(
     split: str = "test",
     *,
     initial_nav: float = 1_000_000,
+    combo: str | None = None,
 ) -> dict:
     """한 fold의 policy+벤치마크 3종을 계산하고, 각각 별도 run으로 S3에 저장한다.
+
+    `combo`(M0~M3)를 주면 그 콤보의 Feature Store를 읽는다 — policy의 State 차원이
+    학습 때와 같아야 하므로, 학습에 쓴 콤보와 반드시 같은 값을 넘겨야 한다.
+    벤치마크 3종은 targets(익일수익률)만 쓰므로 콤보와 무관하게 동일하다.
 
     Returns
     -------
@@ -101,11 +119,11 @@ def run_fold(
     """
     from src.data import feature_store as fs
 
-    cfg = load_config(config_path)
+    cfg = resolve_paths_for_combo(load_config(config_path), combo)
     assets = get_assets(cfg)
     mk = lambda: BacktestEngine(initial_nav=initial_nav, config_path=config_path)
 
-    policy_nav = run_policy_on_fold(model, fold_id, split, config_path, mk())
+    policy_nav = run_policy_on_fold(model, fold_id, split, config_path, mk(), combo=combo)
 
     targets = fs.load_targets(cfg["data"]["feature_store_dir"], fold_id, split)
     price_returns = targets_to_price_returns(targets, assets).loc[policy_nav.index]
@@ -123,11 +141,15 @@ def run_fold(
         metrics = summarize(nav_df, initial_nav)
         strategies[name] = metrics
         s3_prefixes[name] = save_results_to_s3(
-            nav_df, metrics, run_id=_run_id(fold_id, _STRATEGY_KEYS[name]), config_path=config_path
+            nav_df,
+            metrics,
+            run_id=_run_id(fold_id, _STRATEGY_KEYS[name], combo),
+            config_path=config_path,
         )
 
     return {
         "fold_id": fold_id,
+        "combo": combo or cfg.get("active_combo"),
         "period": (str(policy_nav.index[0].date()), str(policy_nav.index[-1].date())),
         "strategies": strategies,
         "nav_by_strategy": nav_by_strategy,
@@ -139,7 +161,9 @@ def run_fold(
 def _print_fold_report(result: dict) -> None:
     fold_id = result["fold_id"]
     start, end = result["period"]
-    print(f"\n=== fold{fold_id} test: {start} ~ {end} ===")
+    combo = result.get("combo")
+    combo_tag = f" [{combo}]" if combo else ""
+    print(f"\n=== fold{fold_id}{combo_tag} test: {start} ~ {end} ===")
     print(f"{'전략':<10}{'총수익':>10}{'샤프':>9}{'MDD':>10}{'회전율':>10}{'누적비용':>14}")
     print("-" * 63)
     for name, m in result["strategies"].items():
@@ -171,6 +195,9 @@ def main() -> None:
     parser.add_argument("--split", default="test", choices=["train", "valid", "test"])
     parser.add_argument("--model-path", default=None, help="기본값은 config.inference.model_path")
     parser.add_argument("--initial-nav", type=float, default=1_000_000)
+    parser.add_argument(
+        "--combo", default=None, help="피처 콤보(M0~M3). 학습에 쓴 콤보와 같아야 한다"
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -181,7 +208,10 @@ def main() -> None:
 
     fold_ids = [args.fold_id] if args.fold_id is not None else _fold_ids(cfg)
     for fold_id in fold_ids:
-        result = run_fold(fold_id, model, args.config, args.split, initial_nav=args.initial_nav)
+        result = run_fold(
+            fold_id, model, args.config, args.split,
+            initial_nav=args.initial_nav, combo=args.combo,
+        )
         _print_fold_report(result)
 
 
