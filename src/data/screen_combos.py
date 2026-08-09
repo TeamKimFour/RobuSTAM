@@ -9,17 +9,24 @@
   - Baseline(`full`, 기존 6+2)을 먼저 스크리닝해 M0~M3 판정의 기준값으로 삼는다.
   - Parameters: run_type, feature_set, state_dim, feature_store_run_id, config_hash,
     asset_features, market_features, drawdown_lookback, git_commit, verdict(PASS/FAIL/BASELINE)
-  - Metrics: mean_abs_ic, sign_stable_frac, ridge_rank_ic, ridge_r2, gbm_rank_ic, gbm_r2,
-    max_abs_z, n_distribution_issues, passed
+  - Metrics: mean_abs_ic, sign_stable_frac, n_unstable_features, ridge_rank_ic, ridge_r2,
+    gbm_rank_ic, gbm_r2, max_abs_z, n_distribution_issues, passed
   - Artifacts: feature_manifest.json, resolved_config.yaml,
     screening_result.csv(fold별 지표 IC + 부호 안정성), distribution_report.csv(fold별
     분포 드리프트 + 최악 극단값 컬럼)
 
-통과 판정: 부호가 전 지표 안정적이고(sign_stable_frac==1.0) Baseline보다 mean|IC|가 떨어지지
-않으면 PASS. 대리모델 값 자체가 작다는 한계는 여전하다(`docs/feature_candidates.md` §5-1).
+통과 판정: **Ridge 또는 GBM rank-IC가 Baseline 이상**이면 PASS(PR #69 도현 리뷰 반영).
+`sign_stable_frac`(부호 안정 지표 비율)은 콤보마다 지표 개수가 달라 분모가 다르다 —
+지표 1개짜리 콤보(M0)는 0.0/1.0밖에 못 나오는 등 콤보 간 직접 비교가 안 되므로 게이트에서
+뺐다. 참고 지표로만 남기고, 콤보 크기에 무관한 절대량인 `n_unstable_features`(부호가
+불안정한 지표 개수)를 함께 기록한다. ridge_rank_ic/gbm_rank_ic는 같은 fold test 구간·같은
+타깃에 대한 결합 예측력이라 콤보 간 직접 비교가 가능하다. 대리모델 값 자체가 작다는 한계는
+여전하다(`docs/feature_candidates.md` §5-1).
 
 MLflow tracking uri는 config `model.mlflow_tracking_uri`(기본 로컬 파일스토어 `mlruns`)를
-그대로 쓴다 — Docker/팀 공용 DB 없이도 로컬에서 즉시 기록된다.
+그대로 쓴다 — Docker/팀 공용 DB 없이도 로컬에서 즉시 기록된다. RL 학습 run(`robustam-ppo`)과
+섞이지 않도록 별도 experiment(`model.mlflow_screening_experiment`, 기본 `robustam-screening`)에
+기록한다.
 
 실행: `python -m src.data.screen_combos`
 """
@@ -94,11 +101,12 @@ def _mean_abs_ic(
     return mean_abs_ic, sign_stable_frac, detail
 
 
-def screen_combo(cfg: dict, combo: str, baseline_mean_abs_ic: float | None = None) -> dict:
+def screen_combo(cfg: dict, combo: str, baseline_metrics: dict | None = None) -> dict:
     """콤보 하나를 스크리닝해 MLflow 로깅에 필요한 모든 것을 dict로 반환한다.
 
-    baseline_mean_abs_ic를 주면 그 값 대비 통과 여부(부호 안정 + mean|IC| 유지)를 판정한다.
-    생략(Baseline 자기 자신을 스크리닝할 때)하면 판정하지 않고 "BASELINE"으로 표시한다.
+    baseline_metrics(Baseline의 metrics dict)를 주면 그 ridge_rank_ic/gbm_rank_ic 대비
+    통과 여부를 판정한다. 생략(Baseline 자기 자신을 스크리닝할 때)하면 판정하지 않고
+    "BASELINE"으로 표시한다.
     """
     resolved = resolve_combo(cfg, combo)
     out_dir = get_feature_store_dir(cfg, combo)
@@ -127,12 +135,18 @@ def screen_combo(cfg: dict, combo: str, baseline_mean_abs_ic: float | None = Non
         drift.loc[f, "worst_extreme_date"] = str(worst_date)
         drift.loc[f, "worst_extreme_z"] = val
 
-    # 최종 통과 여부: 부호가 전 지표 안정적이고, Baseline(full)보다 평균 |IC|가 떨어지지 않을 때.
+    n_unstable_features = int((~ic_detail["sign_stable"]).sum()) if len(ic_detail) else 0
+
+    # 최종 통과 여부: Ridge 또는 GBM rank-IC가 Baseline(full) 이상이면 PASS.
+    # sign_stable_frac은 콤보마다 분모(지표 개수)가 달라 게이트로 쓰지 않는다(PR #69 리뷰).
     # Baseline 본인은 비교 대상이 없으므로 판정하지 않는다.
-    if baseline_mean_abs_ic is None:
+    if baseline_metrics is None:
         verdict, passed = "BASELINE", 1.0
     else:
-        passed_bool = sign_stable_frac == 1.0 and mean_abs_ic >= baseline_mean_abs_ic
+        passed_bool = (
+            surrogate["ridge_ic"] >= baseline_metrics["ridge_rank_ic"]
+            or surrogate["gbm_ic"] >= baseline_metrics["gbm_rank_ic"]
+        )
         verdict, passed = ("PASS" if passed_bool else "FAIL"), float(passed_bool)
 
     return {
@@ -148,11 +162,12 @@ def screen_combo(cfg: dict, combo: str, baseline_mean_abs_ic: float | None = Non
             "drawdown_lookback": resolved["features"]["params"].get("drawdown_lookback"),
             "git_commit": _git_commit(),
             "verdict": verdict,
-            "verdict_rule": "sign_stable_frac==1.0 AND mean_abs_ic>=baseline(full)",
+            "verdict_rule": "ridge_rank_ic>=baseline(full) OR gbm_rank_ic>=baseline(full)",
         },
         "metrics": {
             "mean_abs_ic": mean_abs_ic,
             "sign_stable_frac": sign_stable_frac,
+            "n_unstable_features": float(n_unstable_features),
             "ridge_rank_ic": surrogate["ridge_ic"],
             "ridge_r2": surrogate["ridge_r2"],
             "gbm_rank_ic": surrogate["gbm_ic"],
@@ -188,7 +203,9 @@ def log_to_mlflow(cfg: dict, result: dict) -> str:
     if "://" not in tracking_uri:
         tracking_uri = Path(tracking_uri).resolve().as_uri()
     mlflow.set_tracking_uri(tracking_uri)
-    mlflow.set_experiment(model_cfg.get("mlflow_experiment", "robustam-ppo"))
+    # RL 학습 run(robustam-ppo)과 분리된 별도 experiment — select.py는 valid_sharpe 유무로
+    # 걸러 섞여도 깨지진 않지만, UI 조회 편의를 위해 처음부터 분리한다(PR #69 리뷰).
+    mlflow.set_experiment(model_cfg.get("mlflow_screening_experiment", "robustam-screening"))
 
     with mlflow.start_run(run_name=f"screening-{result['combo']}") as run:
         mlflow.log_params(result["params"])
@@ -214,18 +231,17 @@ def log_to_mlflow(cfg: dict, result: dict) -> str:
 def screen_all(config_path: str = "config/config.yaml") -> pd.DataFrame:
     """Baseline(full)·M0~M3 전부 스크리닝하고 MLflow에 기록한 뒤 요약 표를 반환한다.
 
-    Baseline을 먼저 돌려 그 mean_abs_ic를 기준값으로 나머지 콤보의 통과 여부를 판정한다.
+    Baseline을 먼저 돌려 그 ridge/gbm rank-IC를 기준값으로 나머지 콤보의 통과 여부를 판정한다.
     """
     cfg = load_config(config_path)
 
     baseline_result = screen_combo(cfg, BASELINE_COMBO)
-    baseline_mean_abs_ic = baseline_result["metrics"]["mean_abs_ic"]
 
     rows = {}
     for combo in COMBOS:
         result = (
             baseline_result if combo == BASELINE_COMBO
-            else screen_combo(cfg, combo, baseline_mean_abs_ic=baseline_mean_abs_ic)
+            else screen_combo(cfg, combo, baseline_metrics=baseline_result["metrics"])
         )
         mlflow_run_id = log_to_mlflow(cfg, result)
         rows[combo] = {
@@ -244,11 +260,11 @@ def main() -> None:
     df = screen_all()
     print(df.to_string())
     print(
-        "\n  · ridge_rank_ic/gbm_rank_ic: 대리모델 예측 순위와 실제 익일수익률 순위의 상관"
-        "\n  · mean_abs_ic: 개별 지표(자산 자기IC·시장 SPY IC) |스피어만| 평균"
-        "\n  · sign_stable_frac: fold1~3에서 부호가 안 뒤집힌 지표 비율(1.0=전부 안정)"
+        "\n  · ridge_rank_ic/gbm_rank_ic: 대리모델 예측 순위와 실제 익일수익률 순위의 상관(콤보 간 직접 비교 가능)"
+        "\n  · mean_abs_ic/sign_stable_frac: 개별 지표 |스피어만| 평균·부호 안정 비율(콤보마다 분모가 달라 참고용)"
+        "\n  · n_unstable_features: fold1~3에서 부호가 뒤집힌 지표 개수(콤보 크기 무관, 절대량)"
         "\n  · max_abs_z: test가 train 정규화 기준(μ=0,σ=1)에서 벗어난 최대 표준편차"
-        "\n  · verdict: PASS = 부호 전부 안정 AND mean|IC| ≥ Baseline(full). FAIL = 둘 중 하나 미달"
+        "\n  · verdict: PASS = ridge_rank_ic 또는 gbm_rank_ic가 Baseline(full) 이상"
         "\n  ⚠️ 대리모델·IC는 사전 필터일 뿐 — 최종 판정은 도현 RL + 백테스트 3지표"
     )
 

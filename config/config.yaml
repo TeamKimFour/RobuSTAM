@@ -125,6 +125,9 @@ model:
   vol_penalty_window: 20                # σ_recent 롤링 윈도우 길이(스텝). 2 이상.
   mlflow_tracking_uri: "mlruns"        # 로컬 파일 스토어 (CLAUDE.md 스택: MLflow)
   mlflow_experiment: "robustam-ppo"
+  # 피처 콤보 스크리닝(src/data/screen_combos.py) 전용 experiment — RL 학습 run과 섞이면
+  # MLflow UI에서 구분이 안 되고 향후 다른 지표로 조회할 때 걸릴 수 있어 분리한다(PR #69 리뷰).
+  mlflow_screening_experiment: "robustam-screening"
   model_dir: "mlruns/models"           # 학습된 policy.zip 저장 위치
 
 # ── 추론(precompute) — src/inference/precompute.py ──

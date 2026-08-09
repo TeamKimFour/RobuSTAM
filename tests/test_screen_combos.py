@@ -66,7 +66,10 @@ def _cfg(tmp_path, active="M0"):
         },
         "normalize": {"returns_scope": "per_asset", "feature_scope": "per_column", "eps": 1e-8},
         "split": {"anchor_start": "2010-01-01", "valid_days": 252, "embargo_days": 34},
-        "model": {"mlflow_tracking_uri": str(tmp_path / "mlruns"), "mlflow_experiment": "test-screening"},
+        "model": {
+            "mlflow_tracking_uri": str(tmp_path / "mlruns"),
+            "mlflow_screening_experiment": "test-screening",
+        },
     }
 
 
@@ -126,10 +129,10 @@ def test_screen_combo_end_to_end_shape(tmp_path):
     assert result["params"]["state_dim"] == 156
     assert result["params"]["asset_features"] == "(none)"
     assert result["params"]["market_features"] == "Equity_Bond_Ratio"
-    assert result["params"]["verdict"] == "BASELINE"  # baseline_mean_abs_ic 미지정 시
+    assert result["params"]["verdict"] == "BASELINE"  # baseline_metrics 미지정 시
     assert set(result["metrics"]) == {
-        "mean_abs_ic", "sign_stable_frac", "ridge_rank_ic", "ridge_r2", "gbm_rank_ic",
-        "gbm_r2", "max_abs_z", "n_distribution_issues", "passed",
+        "mean_abs_ic", "sign_stable_frac", "n_unstable_features", "ridge_rank_ic", "ridge_r2",
+        "gbm_rank_ic", "gbm_r2", "max_abs_z", "n_distribution_issues", "passed",
     }
     assert result["metrics"]["passed"] == 1.0
     assert len(result["artifacts"]["feature_manifest"]) == 156
@@ -138,17 +141,26 @@ def test_screen_combo_end_to_end_shape(tmp_path):
 
 
 def test_screen_combo_verdict_against_baseline(tmp_path):
-    """M0에 강한 신호를 심으면 약한 baseline보다 mean|IC|가 높아 PASS해야 한다."""
+    """M0에 강한 신호를 심으면 약한 baseline(ridge/gbm rank-IC)보다 높아 PASS해야 한다.
+
+    verdict는 ridge_rank_ic 또는 gbm_rank_ic 중 하나라도 baseline 이상이면 PASS
+    (PR #69 리뷰 반영 — sign_stable_frac은 콤보마다 분모가 달라 게이트에서 제외).
+    """
     cfg = _cfg(tmp_path)
     out_dir, _ = _seed_build_meta(cfg, "M0")
     for f in (1, 2, 3):
         _write_fold(out_dir, f, M0_ASSET, M0_MARKET, plant_signal=True)
 
-    result_pass = sc.screen_combo(cfg, "M0", baseline_mean_abs_ic=0.01)
+    result_pass = sc.screen_combo(
+        cfg, "M0", baseline_metrics={"ridge_rank_ic": 0.01, "gbm_rank_ic": 0.01}
+    )
     assert result_pass["params"]["verdict"] == "PASS"
     assert result_pass["metrics"]["passed"] == 1.0
+    assert result_pass["metrics"]["n_unstable_features"] == 0.0
 
-    result_fail = sc.screen_combo(cfg, "M0", baseline_mean_abs_ic=999.0)
+    result_fail = sc.screen_combo(
+        cfg, "M0", baseline_metrics={"ridge_rank_ic": 999.0, "gbm_rank_ic": 999.0}
+    )
     assert result_fail["params"]["verdict"] == "FAIL"
     assert result_fail["metrics"]["passed"] == 0.0
 
@@ -174,3 +186,22 @@ def test_log_to_mlflow_writes_params_metrics_artifacts(tmp_path):
         "feature_manifest.json", "resolved_config.yaml",
         "screening_result.csv", "distribution_report.csv",
     }
+
+
+def test_log_to_mlflow_uses_separate_experiment_from_ppo(tmp_path):
+    """스크리닝 run은 robustam-ppo(RL 학습)와 분리된 별도 experiment에 쌓여야 한다(PR #69 리뷰)."""
+    cfg = _cfg(tmp_path)
+    cfg["model"]["mlflow_screening_experiment"] = "my-screening-experiment"
+    out_dir, _ = _seed_build_meta(cfg, "M0")
+    for f in (1, 2, 3):
+        _write_fold(out_dir, f, M0_ASSET, M0_MARKET, plant_signal=True)
+    result = sc.screen_combo(cfg, "M0")
+    run_id = sc.log_to_mlflow(cfg, result)
+
+    import mlflow
+
+    client = mlflow.tracking.MlflowClient(tracking_uri=str(tmp_path / "mlruns"))
+    run = client.get_run(run_id)
+    experiment = client.get_experiment(run.info.experiment_id)
+    assert experiment.name == "my-screening-experiment"
+    assert experiment.name != cfg["model"].get("mlflow_experiment", "robustam-ppo")
