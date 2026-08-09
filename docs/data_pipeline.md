@@ -193,6 +193,11 @@ python -m src.data.screen_combos   # M0~M3 각각 Ridge/GBM rank-IC·R²·mean|I
 - ⚠️ `s3_sync.py`는 `feature_store_dir`를 통째로 재귀 업로드한다. 기본 디렉토리 밑에 M0~M3가
   쌓이므로, 로컬에서 `python -m src.data.s3_sync`를 직접 돌리면 실험용 콤보 산출물까지 팀
   공용 S3에 올라갈 수 있다. `daily.yml`(CI)은 콤보 빌드를 호출하지 않아 안전하다.
+- ✅ `M0`(K_asset=0, D=156)은 PR #68 검증 범위(K_asset∈{2,3})에 없던 조합이라 env·모델
+  왕복이 검증된 적이 없었다(도현 리뷰, PR #69). `tests/test_variable_state_dim.py`의
+  `VARIANTS`에 D=156 케이스를 추가해 확인 — PortfolioEnv·DiscretePortfolioEnv·PPO
+  save/load 왕복·cross-dim 로드 거부까지 전부 정상 동작한다(자산 피처 블록이 전부
+  비어도 조립·슬라이스·SB3 MlpPolicy 입력 크기 결정에 문제없음).
 
 ---
 
@@ -580,3 +585,4 @@ S3에 업로드될 수 있는** 검증되지 않은 경로였다. `get_precomput
 | v0.18 | 2026-07-25 | 셀프리뷰로 발견: `s3_sync.py`가 `data.precompute_path`를 `d["precompute_path"]`로 직접 읽어 다른 소비자(precompute.py·s3_fetch.py·api/main.py)와 다른 config 접근 통로를 썼고, 그 값에 디렉토리 구성요소가 없으면(`Path(...).parent`가 cwd) 작업 디렉토리 전체가 업로드될 수 있었다. `get_precompute_path()`로 통일하고, `_precompute_upload_dir()` 가드로 그런 경우 빈 문자열을 돌려줘 안전하게 skip하도록 수정. |
 | v0.19 | 2026-07-28 | §8-3 순서에 백테스트 리포트 스텝 추가: `daily.yml`이 precompute 뒤·S3 업로드 앞에서 `python -m src.backtest.export --upload-s3`를 실행(같은 gate·continue-on-error 패턴). 상세는 `docs/backtest_engine.md` §4-4. |
 | v0.20 | 2026-08-09 | §3-2 신설: 피처 콤보 시스템(M0~M3, PR #68의 가변 D 배관 위에 `config.yaml` `feature_combos`/`active_combo` + `config_loader.resolve_combo` 추가). `features.py`가 콤보가 요청한 지표만 계산하도록 일반화(`RSI_28`·`Drawdown` 신규). §3-1 저장소 경로를 콤보별 분기로 갱신(`full`은 기존 경로 유지, 하위호환). M0~M3 실데이터 빌드 완료(`data/feature_store/{M0,M1,M2,M3}/`). `src/data/screen_combos.py` 신규: 콤보별 Ridge/GBM rank-IC·R²·mean\|IC\|·분포드리프트를 계산해 MLflow(`run_type=screening`)에 기록, 로컬 파일스토어 사용(`MLFLOW_ALLOW_FILE_STORE` 우회 포함). `active_combo` 기본값 `full`이라 env·train.py·daily.yml은 무영향 — 실제 RL 연결은 후속 작업(도현). |
+| v0.21 | 2026-08-09 | 도현 PR #69 리뷰 반영: (1) verdict 판정을 `sign_stable_frac`(콤보마다 분모가 달라 비교 불가) 게이트에서 콤보 간 직접 비교 가능한 `ridge_rank_ic`/`gbm_rank_ic` 기준으로 교체, `n_unstable_features`(절대량) 메트릭 추가 — M2·M3가 FAIL→PASS로 정정됨(`docs/feature_candidates.md` §5-1). (2) 스크리닝 MLflow run을 `robustam-ppo`(RL 학습)와 분리된 `robustam-screening` experiment로 이동. (3) 구버전 `meta.sqlite`(콤보 도입 전)에 `combo` 컬럼 마이그레이션 추가 — `runs` 테이블 6→7컬럼 불일치로 재빌드가 깨지던 문제 실제 재현 후 수정. (4) `tests/test_variable_state_dim.py`에 D=156(K_asset=0, M0) 케이스 추가 — 형우 PR #68 검증 범위(K_asset∈{2,3})에 없던 조합이었음을 리뷰로 발견, env·PPO 왕복 정상 확인. |
