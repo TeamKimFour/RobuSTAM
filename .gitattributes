@@ -1,3 +1,7 @@
 # 셸 스크립트는 Windows 체크아웃에서도 항상 LF 유지 — CRLF면 Docker 컨테이너 안에서
 # 셔뱅(#!/bin/sh)이 깨진다("bad interpreter: /bin/sh^M: no such file or directory").
 *.sh text eol=lf
+
+# Makefile도 같은 이유로 LF 고정 — CRLF면 레시피 끝의 ^M이 인자로 붙어
+# WSL·macOS·Linux에서 "command not found"로 깨진다.
+Makefile text eol=lf

@@ -22,6 +22,35 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Makefile (자주 쓰는 명령 단축)
+
+긴 docker·실험 명령을 팀 전체가 같은 방식으로 실행하도록 `Makefile`에 모아뒀다.
+아래 문서의 원본 명령은 그대로 유효하며, Makefile은 그 위에 얹은 얇은 래퍼다.
+
+```bash
+make help
+```
+
+| 명령 | 하는 일 |
+| --- | --- |
+| `make mlflow-build` / `mlflow-up` / `mlflow-down` | MLflow 서버 이미지 빌드 · 기동 · 중지 |
+| `make mlflow-logs` / `mlflow-health` / `mlflow-smoke` | 로그 추적 · 헬스체크 · 더미 run 1건 기록 |
+| `make build-features [FEATURE_SET=M1]` | Feature Store 빌드 |
+| `make screen` | 콤보 스크리닝 + MLflow 기록 |
+| `make train [FOLD=1] [SEED=42] [TIMESTEPS=200000]` | PPO 학습 |
+| `make backtest [FOLD=1] [SPLIT=test]` | policy vs 벤치마크 백테스트 |
+| `make test` / `test-data` / `test-model` / `test-backtest` | 테스트 (`make test`는 CI와 동일) |
+
+변수는 `make <target> VAR=값`으로 덮어쓴다. 실행 파일이 `python3`면 `make PYTHON=python3 ...`.
+
+**전제**
+- `mlflow-*` 계열은 프로젝트 루트에 `.env`가 있어야 한다(`.env.example` 복사 후 팀 vault 값으로 채움).
+  Makefile은 존재 여부만 확인하고 **값을 읽거나 출력하지 않는다** — `docker compose`가 `env_file`로 직접 읽는다.
+- `FEATURE_SET`(M0~M3)은 현재 `build-features`에만 연결돼 있다. `train`·`backtest`는 config의
+  `active_combo`를 따르며, `FEATURE_SET`을 넘기면 조용히 무시하지 않고 **에러로 중단**한다.
+- **Windows에는 `make`가 기본 제공되지 않는다.** WSL 또는 Git Bash + `choco install make`로 실행할 것
+  (레시피는 POSIX sh 기준).
+
 ## 데이터 수집
 
 config(`config/config.yaml`)에 정의된 기간·자산으로 원시 일봉을 수집한다.
