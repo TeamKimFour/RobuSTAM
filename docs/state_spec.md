@@ -110,9 +110,9 @@ GBM R² 유일 양수를 기록해 M0을 추가했고, M1~M3는 RSI 길이 튜�
 
 > 세 지표(`MA_Cross_5_20`·`Equity_Bond_Ratio`·`Gold_Vol_Ratio`)는 v1.0 명세에 산식이 없었다.
 > 위 산식은 **2주차 제안값**이며 PR 리뷰에서 팀 확정한다(변경 시 본 표를 우선 갱신).
-> `Drawdown`의 `drawdown_lookback`은 **잠정 60일**이다 — 60일 vs 252일 비교는 민지 별도
-> 과제(팀 주간계획 §2순위)로 진행 중이며, 확정되면 `config.yaml`의 값만 바꾸고 재빌드하면
-> 된다(코드 변경 불필요). `Equity_Bond_Ratio`처럼 자산별로 곱하지 않는다 — 시장 전체 단일값.
+> `Drawdown`의 `drawdown_lookback`은 **60일로 확정**(민지, 2026-08-09 — 252일 대안도
+> 검토했으나 60일로 결정). 향후 재검토 시 `config.yaml`의 값만 바꾸고 재빌드하면 된다
+> (코드 변경 불필요). `Equity_Bond_Ratio`처럼 자산별로 곱하지 않는다 — 시장 전체 단일값.
 
 ---
 
@@ -176,4 +176,4 @@ observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(state_dim,), dty
 |---|---|---|
 | v1.0 | 2026-06-28 | 최초 작성. 187 권장안 확정, 부속결정 ①②③ 명시. |
 | v1.1 | 2026-08-05 | K_asset·K_market도 config에서 산출. schema 헬퍼가 인자를 받아 D 가변 지원(D=166/171/172 검증). |
-| v1.2 | 2026-08-08 | 피처 콤보 M0~M3 확정(§2, `config.yaml` `feature_combos`/`active_combo`). `RSI_28`·`Drawdown`(시장, 잠정 60일) 신규 지표 추가(§3-1). `full`(하위호환, D=187)이 기본 콤보로 유지됨 — env/train.py 실연결은 후속 작업. |
+| v1.2 | 2026-08-08 | 피처 콤보 M0~M3 확정(§2, `config.yaml` `feature_combos`/`active_combo`). `RSI_28`·`Drawdown`(시장) 신규 지표 추가(§3-1), `drawdown_lookback`은 2026-08-09 60일로 확정(252일 대안 검토 후). `full`(하위호환, D=187)이 기본 콤보로 유지됨 — env/train.py 실연결은 후속 작업. |
