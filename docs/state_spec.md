@@ -1,4 +1,4 @@
-# RobuSTAM — State(관측공간) 명세서 v1.0
+# RobuSTAM — State(관측공간) 명세서 v1.2
 
 > **상태: 확정(권장안 채택)** · 부속결정 ①②③ 기본값으로 확정 완료(회의에서 통보)
 > 본 문서는 형우(Gym 환경) · 도현(SB3 모델) · 민지(Feature Store)가 공유하는 **단일 인터페이스 계약**이다.
@@ -54,6 +54,27 @@ D = (A × W) + (K_asset × A) + K_market + A
 `K_asset=3, K_market=2 → D=172`. 검증은 `tests/test_variable_state_dim.py`가 파라메트라이즈로
 env·모델 왕복 계약을 확인한다.
 
+**피처 콤보 M0~M3 (v1.2):** 위 변형 메커니즘을 실제로 소비하는 이름 붙은 콤보 카탈로그가
+`config.yaml`의 `feature_combos`(§ CLAUDE.md 원칙과 동일하게 config가 SSOT)로 확정됐다.
+`active_combo`(기본 `full`)가 소비되는 콤보를 고르고, `config_loader.resolve_combo`가 그
+콤보의 `asset`/`market` 리스트를 `config.features`에 반영한다. `full`은 기존 카논 6+2(=187)로
+env·추론·기존 policy.zip과의 하위호환을 위해 기본값을 유지한다.
+
+| 콤보 | asset_features | market_features | D (W=30) |
+|---|---|---|---|
+| `full`(기본) | 6종(카논) | `Equity_Bond_Ratio`, `Gold_Vol_Ratio` | 187 |
+| `M0` | (없음) | `Equity_Bond_Ratio` | 156 |
+| `M1` | `MACD_Hist`, `Rolling_Vol_20` | `Equity_Bond_Ratio` | 166 |
+| `M2` | `MACD_Hist`, `Rolling_Vol_20`, `RSI_28` | `Equity_Bond_Ratio` | 171 |
+| `M3` | `MACD_Hist`, `Rolling_Vol_20`, `RSI_28` | `Equity_Bond_Ratio`, `Drawdown` | 172 |
+
+근거: `docs/feature_candidates.md`의 대리모델 스크리닝 — EBR(=M0의 유일 시장지표) 단독이
+GBM R² 유일 양수를 기록해 M0을 추가했고, M1~M3는 RSI 길이 튜닝(14→28)·Drawdown 국면신호를
+단계적으로 얹은 조합이다. **현재 범위**: `src/data/build.py`가 `build(combo="M0")` 등으로
+콤보별 Feature Store를 병행 생성할 수 있다. `src/env`·`src/models/train.py`는 아직
+`active_combo`(=`full`)만 소비한다 — M0~M3를 실제 RL 학습·백테스트에 연결하는 것은 별도
+후속 작업이다(docs/data_pipeline.md §3-2).
+
 ---
 
 ## 3. 인덱스 맵 (구현 기준)
@@ -84,9 +105,14 @@ env·모델 왕복 계약을 확인한다.
 | `ROC_10` | `ta.roc(close, 10)` = `close/close.shift(10) − 1` | 조정종가 |
 | `Equity_Bond_Ratio` | `(SPY/TLT) / (SPY/TLT).rolling(20).mean() − 1` (주식·채권 상대강도의 추세 편차) | SPY·TLT 종가 |
 | `Gold_Vol_Ratio` | `Rolling_Vol_20(GLD) / GLD_logret.rolling(60).std()` (금 단기/장기 변동성 비, 레짐 신호) | GLD 로그수익률 |
+| `RSI_28`(M2·M3, v1.2) | `ta.rsi(close, 28)` (Wilder, `RSI_14`와 별도 길이 파라미터 `rsi_28_length`) | 조정종가 |
+| `Drawdown`(M3, v1.2, **시장** 단일값) | `SPY_close / SPY_close.rolling(drawdown_lookback).max() − 1` (최근 고점 대비 낙폭, 국면 신호) | SPY 종가 |
 
 > 세 지표(`MA_Cross_5_20`·`Equity_Bond_Ratio`·`Gold_Vol_Ratio`)는 v1.0 명세에 산식이 없었다.
 > 위 산식은 **2주차 제안값**이며 PR 리뷰에서 팀 확정한다(변경 시 본 표를 우선 갱신).
+> `Drawdown`의 `drawdown_lookback`은 **잠정 60일**이다 — 60일 vs 252일 비교는 민지 별도
+> 과제(팀 주간계획 §2순위)로 진행 중이며, 확정되면 `config.yaml`의 값만 바꾸고 재빌드하면
+> 된다(코드 변경 불필요). `Equity_Bond_Ratio`처럼 자산별로 곱하지 않는다 — 시장 전체 단일값.
 
 ---
 
@@ -150,3 +176,4 @@ observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(state_dim,), dty
 |---|---|---|
 | v1.0 | 2026-06-28 | 최초 작성. 187 권장안 확정, 부속결정 ①②③ 명시. |
 | v1.1 | 2026-08-05 | K_asset·K_market도 config에서 산출. schema 헬퍼가 인자를 받아 D 가변 지원(D=166/171/172 검증). |
+| v1.2 | 2026-08-08 | 피처 콤보 M0~M3 확정(§2, `config.yaml` `feature_combos`/`active_combo`). `RSI_28`·`Drawdown`(시장, 잠정 60일) 신규 지표 추가(§3-1). `full`(하위호환, D=187)이 기본 콤보로 유지됨 — env/train.py 실연결은 후속 작업. |
