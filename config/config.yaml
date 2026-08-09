@@ -29,8 +29,35 @@ data:
   s3_prefix: "robustam"    # S3 키 접두어
   precompute_path: "data/precompute/latest.json"  # 익일 추천 비중 (민지 precompute 생성 → 도현 API 소비, docs/data_pipeline.md §8)
 
-# ── 피처 정의 (2주차 구현 — 이번 주엔 명세만 기록) ──
-# 자산별 6개 + 시장공통 2개. 순서는 docs/state_spec.md 인덱스맵과 일치해야 함.
+# ── 피처 콤보 (3주차: M0~M3 스크리닝 실험용, 이슈 #34 후속) ──
+# 콤보별 자산지표·시장지표 목록. active_combo가 가리키는 콤보가 features.asset/market에
+# 반영되어 실제로 소비된다(config_loader.resolve_combo). full = 기존 카논 6+2(하위호환).
+#   민지 대리모델 스크리닝(docs/feature_candidates.md): EBR 단독(M0)이 GBM R² 유일 양수,
+#   M1~M3는 RSI_28·Drawdown 국면신호를 단계적으로 추가한 조합. 실제 RL 학습·비교는 후속.
+feature_combos:
+  full:
+    asset: ["MA_Cross_5_20", "RSI_14", "MACD_Hist", "Rolling_Vol_20", "Bollinger_Band_Width", "ROC_10"]
+    market: ["Equity_Bond_Ratio", "Gold_Vol_Ratio"]
+  M0:
+    asset: []
+    market: ["Equity_Bond_Ratio"]
+  M1:
+    asset: ["MACD_Hist", "Rolling_Vol_20"]
+    market: ["Equity_Bond_Ratio"]
+  M2:
+    asset: ["MACD_Hist", "Rolling_Vol_20", "RSI_28"]
+    market: ["Equity_Bond_Ratio"]
+  M3:
+    asset: ["MACD_Hist", "Rolling_Vol_20", "RSI_28"]
+    market: ["Equity_Bond_Ratio", "Drawdown"]
+
+# 기본 콤보 — full 유지 (env/train.py/daily.yml이 187차원을 그대로 기대하므로 임의 변경 금지).
+# M0~M3는 python -m src.data.build --combo <name>으로 별도 Feature Store를 병행 생성한다.
+active_combo: "full"
+
+# ── 피처 정의 (2주차 구현) ──
+# active_combo=full일 때 소비되는 기본값(카논 6+2). 순서는 docs/state_spec.md 인덱스맵과 일치해야 함.
+# 다른 콤보(M0~M3)를 빌드할 때는 build(combo=...)가 feature_combos에서 이 값을 덮어써 넘긴다.
 features:
   asset:
     ["MA_Cross_5_20", "RSI_14", "MACD_Hist", "Rolling_Vol_20", "Bollinger_Band_Width", "ROC_10"]
@@ -40,6 +67,7 @@ features:
     sma_fast: 5
     sma_slow: 20
     rsi_length: 14
+    rsi_28_length: 28      # RSI_28(M2·M3) — RSI_14와 별도 길이 파라미터
     macd: [12, 26, 9]      # [fast, slow, signal]
     vol_window: 20
     bbands: [20, 2]        # [length, std]
@@ -47,6 +75,9 @@ features:
     annualize_vol: false
     ebr_ma_window: 20      # Equity_Bond_Ratio: SPY/TLT 비율의 이동평균 창
     gvr_long_window: 60    # Gold_Vol_Ratio: 장기 변동성 창(단기는 vol_window)
+    drawdown_lookback: 60  # Drawdown(M3, SPY 단일값): 최근 N일 고점 대비 낙폭.
+                           # ⚠️ 잠정값 — 60일 vs 252일 비교는 민지 별도 과제(팀 주간계획 §2순위) 대기 중.
+                           # 확정되면 이 값만 바꾸고 재빌드하면 된다(코드 변경 불필요).
 
 # ── walk-forward 분할 (Expanding 방식 — 구현은 2주차) ──
 # train을 2010부터 누적, test 블록을 2년 단위로 전진. fold마다 정규화 통계를 재fit한다.

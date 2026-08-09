@@ -49,7 +49,7 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> dict:
 
 
 def _validate(cfg: dict) -> None:
-    """필수 키와 핵심 불변식(자산 순서·W 양수)을 검증한다."""
+    """필수 키와 핵심 불변식(자산 순서·W 양수·콤보 정합성)을 검증한다."""
     for key in ("assets", "window", "transaction_cost"):
         if key not in cfg:
             raise KeyError(f"config에 필수 키가 없습니다: '{key}'")
@@ -63,6 +63,41 @@ def _validate(cfg: dict) -> None:
 
     if not isinstance(cfg["window"], int) or cfg["window"] <= 0:
         raise ValueError(f"window(W)는 양의 정수여야 합니다: {cfg['window']!r}")
+
+    if "feature_combos" in cfg or "active_combo" in cfg:
+        _validate_combos(cfg)
+
+
+def _validate_combos(cfg: dict) -> None:
+    """feature_combos/active_combo 섹션의 정합성을 검증한다 (M0~M3 등 콤보 시스템).
+
+    이 섹션이 없는 config(구 계약)는 이 함수가 아예 호출되지 않으므로 영향 없다.
+    """
+    from src.data.features import KNOWN_ASSET_FEATURES, KNOWN_MARKET_FEATURES
+
+    combos = cfg.get("feature_combos")
+    active = cfg.get("active_combo")
+    if combos is None or active is None:
+        raise KeyError("feature_combos와 active_combo는 함께 정의해야 합니다")
+
+    if active not in combos:
+        raise ValueError(f"active_combo({active!r})가 feature_combos에 없습니다: {list(combos)}")
+
+    for name, spec in combos.items():
+        if "asset" not in spec or "market" not in spec:
+            raise KeyError(f"feature_combos.{name}에는 asset·market 키가 모두 있어야 합니다")
+        for kind, names, known in (
+            ("asset", spec["asset"], KNOWN_ASSET_FEATURES),
+            ("market", spec["market"], KNOWN_MARKET_FEATURES),
+        ):
+            if len(set(names)) != len(names):
+                raise ValueError(f"feature_combos.{name}.{kind}에 중복 지표가 있습니다: {names}")
+            unknown = [n for n in names if n not in known]
+            if unknown:
+                raise ValueError(
+                    f"feature_combos.{name}.{kind}에 알 수 없는 지표: {unknown} "
+                    f"(지원: {sorted(known)})"
+                )
 
 
 def get_window(cfg: dict) -> int:
@@ -108,6 +143,56 @@ def get_n_asset_features(cfg: dict) -> int:
 def get_n_market_features(cfg: dict) -> int:
     """K_market — 시장 공통지표 수."""
     return len(get_market_features(cfg))
+
+
+def resolve_combo(cfg: dict, combo: str | None = None) -> dict:
+    """콤보(생략 시 cfg['active_combo'])의 피처 리스트로 cfg['features']를 덮어쓴 새 dict를 반환한다.
+
+    콤보 시스템(M0~M3, docs/data_pipeline.md §3-2)의 유일한 진입점 — 이후
+    get_asset_features/get_market_features/get_state_dim/compute_features/
+    assemble_state_matrix는 반환된 cfg만 보면 되고 콤보 개념을 몰라도 된다.
+    원본 cfg는 변경하지 않는다(얕은 복사 + features만 새 dict).
+
+    cfg에 feature_combos가 없으면(구 계약) 원본 cfg를 그대로 반환한다.
+    """
+    combos = cfg.get("feature_combos")
+    if combos is None:
+        return cfg
+    name = combo if combo is not None else cfg["active_combo"]
+    if name not in combos:
+        raise ValueError(f"콤보 '{name}'가 feature_combos에 없습니다: {list(combos)}")
+    spec = combos[name]
+    resolved = dict(cfg)
+    resolved["features"] = {
+        **cfg.get("features", {}),
+        "asset": list(spec["asset"]),
+        "market": list(spec["market"]),
+    }
+    return resolved
+
+
+def get_feature_store_dir(cfg: dict, combo: str | None = None) -> str:
+    """콤보별 Feature Store 출력 디렉토리를 반환한다.
+
+    combo가 None이거나 'full'(=active_combo 기본값)이면 기존 플랫 경로를 그대로 반환한다
+    (하위호환 핵심 — env/train.py/daily.yml이 기대하는 data/feature_store/fold=*/... 를
+    바꾸지 않는다). 그 외 콤보는 <base>/<combo>/ 하위 디렉토리로 분리한다.
+    """
+    base = cfg.get("data", {}).get("feature_store_dir", "data/feature_store")
+    name = combo if combo is not None else cfg.get("active_combo")
+    if name in (None, "full"):
+        return base
+    return str(Path(base) / name)
+
+
+def get_meta_db(cfg: dict, combo: str | None = None) -> str:
+    """콤보별 메타DB(sqlite) 경로를 반환한다. get_feature_store_dir와 동일한 하위호환 규칙."""
+    base = cfg.get("data", {}).get("meta_db", "data/feature_store/meta.sqlite")
+    name = combo if combo is not None else cfg.get("active_combo")
+    if name in (None, "full"):
+        return base
+    p = Path(base)
+    return str(p.parent / name / p.name)
 
 
 def get_state_dim(cfg: dict) -> int:
