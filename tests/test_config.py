@@ -4,6 +4,8 @@
 실제 파일 로드는 PyYAML이 필요하므로 importorskip으로 가드한다.
 """
 
+from pathlib import Path
+
 import pytest
 
 from src import config_loader as cl
@@ -81,3 +83,107 @@ def test_model_fold_id_default_is_one_indexed():
     pytest.importorskip("yaml")
     cfg = cl.load_config("config/config.yaml")
     assert cfg["model"]["fold_id"] == 1
+
+
+# ── 피처 콤보(M0~M3) — config_loader.resolve_combo / 경로 헬퍼 / 검증 ────────
+
+
+def _combo_cfg(active="full"):
+    return {
+        "assets": ["SPY", "EWY", "TLT", "GLD", "SHV"],
+        "window": 30,
+        "transaction_cost": 0.001,
+        "feature_combos": {
+            "full": {"asset": ["A1", "A2"], "market": ["MA_KNOWN"]},
+            "M0": {"asset": [], "market": ["MA_KNOWN"]},
+        },
+        "active_combo": active,
+    }
+
+
+def test_resolve_combo_without_feature_combos_returns_cfg_unchanged():
+    """feature_combos 섹션이 없는 구 계약 cfg는 resolve_combo가 그대로 돌려줘야 한다."""
+    cfg = _fake_cfg()
+    assert cl.resolve_combo(cfg) is cfg
+
+
+def test_resolve_combo_uses_active_combo_by_default():
+    cfg = _combo_cfg(active="M0")
+    resolved = cl.resolve_combo(cfg)
+    assert resolved["features"]["asset"] == []
+    assert resolved["features"]["market"] == ["MA_KNOWN"]
+    assert cfg.get("features") is None  # 원본 cfg는 불변
+
+
+def test_resolve_combo_explicit_combo_overrides_active():
+    cfg = _combo_cfg(active="full")
+    resolved = cl.resolve_combo(cfg, combo="M0")
+    assert resolved["features"]["asset"] == []
+
+
+def test_resolve_combo_unknown_combo_raises():
+    cfg = _combo_cfg()
+    with pytest.raises(ValueError):
+        cl.resolve_combo(cfg, combo="does-not-exist")
+
+
+def test_get_feature_store_dir_full_keeps_legacy_path():
+    cfg = {"data": {"feature_store_dir": "data/feature_store"}, "active_combo": "full"}
+    assert cl.get_feature_store_dir(cfg) == "data/feature_store"
+    assert cl.get_feature_store_dir(cfg, combo="full") == "data/feature_store"
+    assert cl.get_feature_store_dir(cfg, combo=None) == "data/feature_store"
+
+
+def test_get_feature_store_dir_other_combo_nests_under_base():
+    cfg = {"data": {"feature_store_dir": "data/feature_store"}, "active_combo": "full"}
+    assert cl.get_feature_store_dir(cfg, combo="M0") == str(Path("data/feature_store") / "M0")
+
+
+def test_get_meta_db_full_keeps_legacy_path():
+    cfg = {"data": {"meta_db": "data/feature_store/meta.sqlite"}, "active_combo": "full"}
+    assert cl.get_meta_db(cfg) == "data/feature_store/meta.sqlite"
+
+
+def test_get_meta_db_other_combo_nests_under_base():
+    cfg = {"data": {"meta_db": "data/feature_store/meta.sqlite"}, "active_combo": "full"}
+    assert cl.get_meta_db(cfg, combo="M1") == str(Path("data/feature_store/M1/meta.sqlite"))
+
+
+def test_validate_combos_rejects_unknown_active_combo():
+    cfg = _combo_cfg(active="does-not-exist")
+    with pytest.raises(ValueError):
+        cl._validate(cfg)
+
+
+def test_validate_combos_rejects_unknown_feature_name():
+    cfg = _combo_cfg()
+    cfg["feature_combos"]["full"]["asset"] = ["Totally_Unknown_Feature"]
+    with pytest.raises(ValueError):
+        cl._validate(cfg)
+
+
+def test_validate_combos_rejects_duplicate_feature_in_combo():
+    cfg = _combo_cfg()
+    cfg["feature_combos"]["full"]["asset"] = ["A1", "A1"]
+    with pytest.raises(ValueError):
+        cl._validate(cfg)
+
+
+def test_validate_combos_rejects_missing_active_combo_key():
+    cfg = _combo_cfg()
+    del cfg["active_combo"]
+    with pytest.raises(KeyError):
+        cl._validate(cfg)
+
+
+def test_real_config_defines_m0_through_m3():
+    """실제 config.yaml의 feature_combos가 M0~M3 4개 차원(156/166/171/172)을 정확히 낸다."""
+    pytest.importorskip("yaml")
+    cfg = cl.load_config("config/config.yaml")
+    assert cfg["active_combo"] == "full"
+    assert cl.get_state_dim(cfg) == 187  # active_combo=full 기본값 하위호환
+
+    expected_dims = {"M0": 156, "M1": 166, "M2": 171, "M3": 172}
+    for combo, dim in expected_dims.items():
+        resolved = cl.resolve_combo(cfg, combo)
+        assert cl.get_state_dim(resolved) == dim, combo
