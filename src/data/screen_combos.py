@@ -1,16 +1,22 @@
-"""M0~M3 콤보 스크리닝 — 콤보 전용 Feature Store로 예측력·분포를 측정하고 MLflow에 기록.
+"""Baseline·M0~M3 콤보 스크리닝 — 콤보 전용 Feature Store로 예측력·분포를 측정하고 MLflow에 기록.
 
 `screen_features.py`는 이미 빌드된 `full`(187) Feature Store에서 컬럼만 골라 대리모델을
 돌린다. 하지만 `M2`/`M3`가 쓰는 `RSI_28`·`Drawdown`은 `full`에 아예 없는 신규 지표라(콤보
 전용 빌드에만 존재) 그 방식으로는 스크리닝할 수 없다. 이 모듈은 `src.data.build`가 콤보별로
 따로 만든 자기 Feature Store(`data/feature_store/<combo>/`)를 대상으로 삼는다.
 
-측정 항목(팀 주간계획 "4순위: MLflow 스크리닝 기록 연결" 스펙):
+측정 항목(팀 주간계획 "3순위: 정확한 조합 스크리닝"·"4순위: MLflow 스크리닝 기록 연결" 스펙):
+  - Baseline(`full`, 기존 6+2)을 먼저 스크리닝해 M0~M3 판정의 기준값으로 삼는다.
   - Parameters: run_type, feature_set, state_dim, feature_store_run_id, config_hash,
-    asset_features, market_features, drawdown_lookback, git_commit
-  - Metrics: mean_abs_ic, ridge_rank_ic, ridge_r2, gbm_rank_ic, gbm_r2, max_abs_z
-  - Artifacts: feature_manifest.json, resolved_config.yaml, screening_result.csv,
-    distribution_report.csv
+    asset_features, market_features, drawdown_lookback, git_commit, verdict(PASS/FAIL/BASELINE)
+  - Metrics: mean_abs_ic, sign_stable_frac, ridge_rank_ic, ridge_r2, gbm_rank_ic, gbm_r2,
+    max_abs_z, n_distribution_issues, passed
+  - Artifacts: feature_manifest.json, resolved_config.yaml,
+    screening_result.csv(fold별 지표 IC + 부호 안정성), distribution_report.csv(fold별
+    분포 드리프트 + 최악 극단값 컬럼)
+
+통과 판정: 부호가 전 지표 안정적이고(sign_stable_frac==1.0) Baseline보다 mean|IC|가 떨어지지
+않으면 PASS. 대리모델 값 자체가 작다는 한계는 여전하다(`docs/feature_candidates.md` §5-1).
 
 MLflow tracking uri는 config `model.mlflow_tracking_uri`(기본 로컬 파일스토어 `mlruns`)를
 그대로 쓴다 — Docker/팀 공용 DB 없이도 로컬에서 즉시 기록된다.
@@ -40,10 +46,13 @@ from src.config_loader import (
 )
 from src.data import feature_store as fs
 from src.data import schema
-from src.data.analyze_features import FOLDS, _aligned, _spearman, drift_summary
+from src.data.analyze_features import FOLDS, _aligned, _spearman, drift_summary, normalization_sanity
 from src.data.screen_features import surrogate_score
 
-COMBOS = ("M0", "M1", "M2", "M3")
+# full(기존 6+2)을 Baseline으로 먼저 스크리닝하고, 그 mean_abs_ic를 기준으로 M0~M3의
+# 통과 여부를 판정한다(팀 주간계획 "3순위": Baseline·M1·M2·M3 비교).
+BASELINE_COMBO = "full"
+COMBOS = (BASELINE_COMBO, "M0", "M1", "M2", "M3")
 
 
 def _git_commit() -> str:
@@ -55,11 +64,15 @@ def _git_commit() -> str:
         return "unknown"
 
 
-def _mean_abs_ic(out_dir: str, asset_feats: list[str], market_feats: list[str]) -> tuple[float, pd.DataFrame]:
-    """개별 지표 스피어만 IC(fold1~3 test 평균 |IC|)와 세부 표를 반환한다.
+def _mean_abs_ic(
+    out_dir: str, asset_feats: list[str], market_feats: list[str]
+) -> tuple[float, float, pd.DataFrame]:
+    """개별 지표 스피어만 IC(fold1~3 test)·부호 안정성·mean|IC|를 계산한다.
 
     자산 지표는 자기 자산 익일수익률, 시장 지표는 SPY 익일수익률과 상관(analyze_features와 동일 관례).
+    반환: (전체 mean|IC|, 부호 안정 지표 비율[0~1], fold별 IC·mean_abs_IC·sign_stable 세부 표).
     """
+    fold_cols = [f"fold{f}" for f in FOLDS]
     rows: dict[str, list[float]] = {name: [] for name in (*asset_feats, *market_feats)}
     for f in FOLDS:
         feats, tgts = _aligned(out_dir, f, "test")
@@ -70,14 +83,23 @@ def _mean_abs_ic(out_dir: str, asset_feats: list[str], market_feats: list[str]) 
         for m in market_feats:
             rows[m].append(_spearman(feats[f"mkt_{m}"], y_spy))
 
-    detail = pd.DataFrame(rows, index=[f"fold{f}" for f in FOLDS]).T
+    detail = pd.DataFrame(rows, index=fold_cols).T
     detail["mean_abs_IC"] = detail.abs().mean(axis=1)
+    # 부호 안정성: fold마다 부호가 같으면(NaN 제외) 안정 — ic_stability(analyze_features)와 동일 관례.
+    signs = np.sign(detail[fold_cols].to_numpy())
+    detail["sign_stable"] = [len({s for s in row if not np.isnan(s)}) <= 1 for row in signs]
+
     mean_abs_ic = float(detail["mean_abs_IC"].mean()) if len(detail) else float("nan")
-    return mean_abs_ic, detail
+    sign_stable_frac = float(detail["sign_stable"].mean()) if len(detail) else float("nan")
+    return mean_abs_ic, sign_stable_frac, detail
 
 
-def screen_combo(cfg: dict, combo: str) -> dict:
-    """콤보 하나를 스크리닝해 MLflow 로깅에 필요한 모든 것을 dict로 반환한다."""
+def screen_combo(cfg: dict, combo: str, baseline_mean_abs_ic: float | None = None) -> dict:
+    """콤보 하나를 스크리닝해 MLflow 로깅에 필요한 모든 것을 dict로 반환한다.
+
+    baseline_mean_abs_ic를 주면 그 값 대비 통과 여부(부호 안정 + mean|IC| 유지)를 판정한다.
+    생략(Baseline 자기 자신을 스크리닝할 때)하면 판정하지 않고 "BASELINE"으로 표시한다.
+    """
     resolved = resolve_combo(cfg, combo)
     out_dir = get_feature_store_dir(cfg, combo)
     db = get_meta_db(cfg, combo)
@@ -92,9 +114,26 @@ def screen_combo(cfg: dict, combo: str) -> dict:
         )
 
     surrogate = surrogate_score(out_dir, asset_feats, market_feats)
-    mean_abs_ic, ic_detail = _mean_abs_ic(out_dir, asset_feats, market_feats)
+    mean_abs_ic, sign_stable_frac, ic_detail = _mean_abs_ic(out_dir, asset_feats, market_feats)
     drift = drift_summary(out_dir)
     max_abs_z = float(drift["max_|z|"].max()) if len(drift) else float("nan")
+
+    # 결측치·극단값(초기 warm-up NaN 잔존 여부·test 최악 이탈치) — analyze_features 재사용.
+    # worst_test_extreme[fold] = ((날짜, 컬럼명), z) — stack()된 (row,col) MultiIndex의 idxmax.
+    sanity = normalization_sanity(out_dir)
+    n_issues = len(sanity["issues"])
+    for f, ((worst_date, worst_col), val) in sanity["worst_test_extreme"].items():
+        drift.loc[f, "worst_extreme_col"] = worst_col
+        drift.loc[f, "worst_extreme_date"] = str(worst_date)
+        drift.loc[f, "worst_extreme_z"] = val
+
+    # 최종 통과 여부: 부호가 전 지표 안정적이고, Baseline(full)보다 평균 |IC|가 떨어지지 않을 때.
+    # Baseline 본인은 비교 대상이 없으므로 판정하지 않는다.
+    if baseline_mean_abs_ic is None:
+        verdict, passed = "BASELINE", 1.0
+    else:
+        passed_bool = sign_stable_frac == 1.0 and mean_abs_ic >= baseline_mean_abs_ic
+        verdict, passed = ("PASS" if passed_bool else "FAIL"), float(passed_bool)
 
     return {
         "combo": combo,
@@ -108,14 +147,19 @@ def screen_combo(cfg: dict, combo: str) -> dict:
             "market_features": ",".join(market_feats),
             "drawdown_lookback": resolved["features"]["params"].get("drawdown_lookback"),
             "git_commit": _git_commit(),
+            "verdict": verdict,
+            "verdict_rule": "sign_stable_frac==1.0 AND mean_abs_ic>=baseline(full)",
         },
         "metrics": {
             "mean_abs_ic": mean_abs_ic,
+            "sign_stable_frac": sign_stable_frac,
             "ridge_rank_ic": surrogate["ridge_ic"],
             "ridge_r2": surrogate["ridge_r2"],
             "gbm_rank_ic": surrogate["gbm_ic"],
             "gbm_r2": surrogate["gbm_r2"],
             "max_abs_z": max_abs_z,
+            "n_distribution_issues": float(n_issues),
+            "passed": passed,
         },
         "artifacts": {
             "feature_manifest": schema.feature_names(W, asset_feats, market_feats),
@@ -168,27 +212,43 @@ def log_to_mlflow(cfg: dict, result: dict) -> str:
 
 
 def screen_all(config_path: str = "config/config.yaml") -> pd.DataFrame:
-    """M0~M3 전부 스크리닝하고 MLflow에 기록한 뒤 요약 표를 반환한다."""
+    """Baseline(full)·M0~M3 전부 스크리닝하고 MLflow에 기록한 뒤 요약 표를 반환한다.
+
+    Baseline을 먼저 돌려 그 mean_abs_ic를 기준값으로 나머지 콤보의 통과 여부를 판정한다.
+    """
     cfg = load_config(config_path)
+
+    baseline_result = screen_combo(cfg, BASELINE_COMBO)
+    baseline_mean_abs_ic = baseline_result["metrics"]["mean_abs_ic"]
+
     rows = {}
     for combo in COMBOS:
-        result = screen_combo(cfg, combo)
+        result = (
+            baseline_result if combo == BASELINE_COMBO
+            else screen_combo(cfg, combo, baseline_mean_abs_ic=baseline_mean_abs_ic)
+        )
         mlflow_run_id = log_to_mlflow(cfg, result)
-        rows[combo] = {**result["metrics"], "mlflow_run_id": mlflow_run_id}
+        rows[combo] = {
+            **result["metrics"],
+            "verdict": result["params"]["verdict"],
+            "mlflow_run_id": mlflow_run_id,
+        }
     return pd.DataFrame(rows).T
 
 
 def main() -> None:
-    pd.set_option("display.width", 120)
-    print("=" * 90)
-    print("M0~M3 콤보 스크리닝 — 콤보 전용 Feature Store, MLflow(run_type=screening) 기록")
-    print("=" * 90)
+    pd.set_option("display.width", 140)
+    print("=" * 100)
+    print("Baseline(full)·M0~M3 콤보 스크리닝 — 콤보 전용 Feature Store, MLflow(run_type=screening) 기록")
+    print("=" * 100)
     df = screen_all()
     print(df.to_string())
     print(
         "\n  · ridge_rank_ic/gbm_rank_ic: 대리모델 예측 순위와 실제 익일수익률 순위의 상관"
         "\n  · mean_abs_ic: 개별 지표(자산 자기IC·시장 SPY IC) |스피어만| 평균"
+        "\n  · sign_stable_frac: fold1~3에서 부호가 안 뒤집힌 지표 비율(1.0=전부 안정)"
         "\n  · max_abs_z: test가 train 정규화 기준(μ=0,σ=1)에서 벗어난 최대 표준편차"
+        "\n  · verdict: PASS = 부호 전부 안정 AND mean|IC| ≥ Baseline(full). FAIL = 둘 중 하나 미달"
         "\n  ⚠️ 대리모델·IC는 사전 필터일 뿐 — 최종 판정은 도현 RL + 백테스트 3지표"
     )
 

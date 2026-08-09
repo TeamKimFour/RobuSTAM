@@ -89,16 +89,18 @@ def test_mean_abs_ic_recovers_planted_signal(tmp_path):
     out_dir, _ = _seed_build_meta(_cfg(tmp_path), "M0")
     for f in (1, 2, 3):
         _write_fold(out_dir, f, M0_ASSET, M0_MARKET, plant_signal=True)
-    mean_abs_ic, detail = sc._mean_abs_ic(out_dir, M0_ASSET, M0_MARKET)
+    mean_abs_ic, sign_stable_frac, detail = sc._mean_abs_ic(out_dir, M0_ASSET, M0_MARKET)
     assert mean_abs_ic > 0.8  # 3배 선형 신호를 심었으니 강하게 잡혀야 함
+    assert sign_stable_frac == 1.0  # 항상 같은 부호로 심었으니 안정적이어야 함
     assert list(detail.index) == ["Equity_Bond_Ratio"]
+    assert detail.loc["Equity_Bond_Ratio", "sign_stable"] == True  # noqa: E712
 
 
 def test_mean_abs_ic_near_zero_on_noise(tmp_path):
     out_dir, _ = _seed_build_meta(_cfg(tmp_path), "M1")
     for f in (1, 2, 3):
         _write_fold(out_dir, f, M1_ASSET, M1_MARKET, plant_signal=False)
-    mean_abs_ic, _ = sc._mean_abs_ic(out_dir, M1_ASSET, M1_MARKET)
+    mean_abs_ic, _, _ = sc._mean_abs_ic(out_dir, M1_ASSET, M1_MARKET)
     assert mean_abs_ic < 0.3
 
 
@@ -124,10 +126,31 @@ def test_screen_combo_end_to_end_shape(tmp_path):
     assert result["params"]["state_dim"] == 156
     assert result["params"]["asset_features"] == "(none)"
     assert result["params"]["market_features"] == "Equity_Bond_Ratio"
+    assert result["params"]["verdict"] == "BASELINE"  # baseline_mean_abs_ic 미지정 시
     assert set(result["metrics"]) == {
-        "mean_abs_ic", "ridge_rank_ic", "ridge_r2", "gbm_rank_ic", "gbm_r2", "max_abs_z",
+        "mean_abs_ic", "sign_stable_frac", "ridge_rank_ic", "ridge_r2", "gbm_rank_ic",
+        "gbm_r2", "max_abs_z", "n_distribution_issues", "passed",
     }
+    assert result["metrics"]["passed"] == 1.0
     assert len(result["artifacts"]["feature_manifest"]) == 156
+    assert "sign_stable" in result["artifacts"]["ic_detail"].columns
+    assert "worst_extreme_col" in result["artifacts"]["distribution_report"].columns
+
+
+def test_screen_combo_verdict_against_baseline(tmp_path):
+    """M0에 강한 신호를 심으면 약한 baseline보다 mean|IC|가 높아 PASS해야 한다."""
+    cfg = _cfg(tmp_path)
+    out_dir, _ = _seed_build_meta(cfg, "M0")
+    for f in (1, 2, 3):
+        _write_fold(out_dir, f, M0_ASSET, M0_MARKET, plant_signal=True)
+
+    result_pass = sc.screen_combo(cfg, "M0", baseline_mean_abs_ic=0.01)
+    assert result_pass["params"]["verdict"] == "PASS"
+    assert result_pass["metrics"]["passed"] == 1.0
+
+    result_fail = sc.screen_combo(cfg, "M0", baseline_mean_abs_ic=999.0)
+    assert result_fail["params"]["verdict"] == "FAIL"
+    assert result_fail["metrics"]["passed"] == 0.0
 
 
 def test_log_to_mlflow_writes_params_metrics_artifacts(tmp_path):
