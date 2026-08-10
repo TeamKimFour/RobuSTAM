@@ -72,3 +72,79 @@
 ```bash
 python -m src.data.screen_candidates   # 본 문서 §1 표 출력
 ```
+
+---
+
+## 5. 후속 반영 — M0~M3 피처 콤보 확정 (2026-08-08)
+
+§3의 개선안(부호반전 4종 제거·RSI 14→28·Drawdown 추가·EBR 유지)이 `config.yaml`의
+`feature_combos`(`M2`/`M3`)로 실제 구현됐다(`docs/data_pipeline.md` §3-2,
+`docs/state_spec.md` §2). §1 표의 `RSI_SPY_28`/`Regime_Drawdown_SPY`(탐색용 원시가격 계산
+이름)는 production 스키마에서 `RSI_28`/`Drawdown`으로 이름이 정리됐다.
+
+추가로 `ebr_only`(§4 스크리닝 표 — 대리모델 GBM R²가 유일하게 양수) 결과를 근거로 `M0`을
+가장 작은 베이스라인으로 신설했다. 스크리닝 챔피언이었지만 실제 Feature Store 빌드·RL 학습으로는
+한 번도 검증되지 않았다는 문제의식이 계기였다 — `M0`은 이제 다른 콤보와 동일하게 실제 빌드
+가능하다. `M1`은 `M2`(RSI_28 추가 전)에 해당하는 중간 단계 베이스라인으로 함께 추가했다.
+
+| 콤보 | 구성 | 위치 |
+|---|---|---|
+| `M0` | `Equity_Bond_Ratio`(=EBR) 단독 | 최소 베이스라인, 이 문서 §1의 `ebr_only`/`baseline_EBR` 근거 |
+| `M1` | `MACD_Hist`+`Rolling_Vol_20`+EBR | 중간 베이스라인(§3 "노이즈 제거" 방향, RSI 튜닝 전) |
+| `M2` | M1 + `RSI_28` | §3 제안안 1 구현 |
+| `M3` | M2 + `Drawdown`(시장, lookback 60일 확정) | §3 제안안 2 구현 |
+
+⚠️ §4의 한계는 그대로 유효하다 — 이 콤보들의 대리모델 스크리닝이나 IC가 좋다고 RL 성공이
+보장되지 않는다. 최종 판정은 도현 RL + 백테스트 3지표로만 확정되며, 그 연결은 아직 이뤄지지
+않았다(`docs/data_pipeline.md` §3-2 "남은 연결고리").
+
+### 5-1. Baseline·M0~M3 실제 스크리닝 결과 (2026-08-09, `python -m src.data.screen_combos`)
+
+실데이터로 빌드한 콤보별 Feature Store를 대상으로 측정(fold1~3 test 평균).
+Baseline(`full`, 기존 6+2)을 함께 스크리닝해 M0~M3 판정의 기준값으로 삼았다. MLflow
+`run_type=screening`에 별도 experiment(`robustam-screening`, RL 학습 run과 분리)로
+기록됨(`docs/data_pipeline.md` §3-2).
+
+> **PR #69 리뷰(도현) 반영**: 최초 버전은 `sign_stable_frac==1.0`을 통과 게이트로 썼는데,
+> 이 값은 콤보 자신의 지표 개수가 분모라 콤보 간 직접 비교가 안 된다(지표 1개짜리 `M0`은
+> 0.0/1.0밖에 못 나옴). 실제로 `M2`·`M3`는 **불안정 지표 개수가 똑같이 1개**인데 분모(지표
+> 수)가 달라 `sign_stable_frac`만 0.75/0.80으로 갈렸었다 — 최초 버전 본문의 "지표를 더
+> 얹을수록 불안정해진다"는 서술은 이 착시에서 나온 잘못된 해석이었다(정정). 지금은
+> **콤보 간 직접 비교가 가능한 `ridge_rank_ic`/`gbm_rank_ic`가 Baseline 이상이면 PASS**로
+> 바꿨고, `sign_stable_frac`은 참고용으로만 남기고 콤보 크기에 무관한 절대량인
+> `n_unstable_features`(부호 불안정 지표 개수)를 함께 기록한다.
+
+**통과 기준(verdict)**: `ridge_rank_ic` 또는 `gbm_rank_ic`가 Baseline 이상이면 PASS.
+결측치(`n_distribution_issues`)는 5개 콤보 전부 0 — warm-up NaN이 정상적으로 걸러졌고
+잔존 NaN/inf 없음을 확인했다.
+
+| 콤보 | mean\_abs\_ic | sign\_stable\_frac | n\_unstable | ridge\_rank\_ic | ridge\_r2 | gbm\_rank\_ic | gbm\_r2 | max\_abs\_z | 판정 |
+|---|---|---|---|---|---|---|---|---|---|
+| `full`(Baseline) | 0.049 | 0.375 | 5 | 0.009 | −0.002 | 0.022 | −0.121 | 22.1 | — (기준) |
+| `M0` | **0.100** | 1.0 | **0** | **0.038** | −0.001 | **0.028** | **0.001** | **7.6** | ✅ **PASS** |
+| `M1` | 0.055 | 1.0 | **0** | 0.029 | −0.001 | 0.013 | −0.035 | 22.1 | ✅ **PASS** |
+| `M2` | 0.054 | 0.75 | 1 | 0.023 | −0.001 | 0.022 | −0.079 | 22.1 | ✅ **PASS** |
+| `M3` | 0.060 | 0.80 | 1 | 0.017 | −0.002 | 0.006 | −0.066 | 22.1 | ✅ **PASS** |
+
+**정직한 관찰**:
+- **콤보 간 직접 비교가 가능한 지표(ridge_rank_ic·gbm_rank_ic)에서는 M0~M3 사이에 유의미한
+  차이가 없다** — 전부 Baseline보다 살짝 나은 수준(|rank-IC|≤0.04)이라 M0~M3 전부 PASS다.
+  이번 주 RL 학습 후보에서 M2·M3를 뺄 근거는 없다.
+- `M0`(EBR 단독)이 `mean_abs_ic`·`ridge_rank_ic`·`gbm_rank_ic`·`gbm_r2`(유일 양수) 전부에서
+  가장 낫다. §1·§4의 기존 결론("EBR이 유일하게 안정적인 신호, 다른 지표는 노이즈에 가깝다")과
+  방향이 일치한다.
+- `M2`·`M3`의 불안정 지표는 확인 결과 **둘 다 `RSI_28`** 하나뿐이다(`MACD_Hist`·
+  `Rolling_Vol_20`·`Equity_Bond_Ratio`·`Drawdown`은 두 콤보 모두 안정). `Drawdown`을 추가해도
+  `RSI_28`의 불안정성 자체는 그대로라 `Drawdown`이 문제를 더하거나 줄이지 않았다는 뜻이다 —
+  최초 버전의 "지표를 더 얹을수록 불안정해진다" 서술은 `sign_stable_frac`(분모가 다른 비율)만
+  보고 낸 착시였고, 실제 원인은 처음부터 `RSI_28` 한 곳이었다(도현 리뷰로 확인).
+- `full`은 Baseline인데도 `mean_abs_ic`(0.049)·`n_unstable_features`(5/8)가 M0·M1보다
+  나쁘다 — 6개 자산지표 중 다수가 부호 불안정(4종 노이즈 제거 이전 상태이므로 예상된 결과,
+  §3 "부호반전 4종 제거" 제안의 근거와 일치).
+- `M1`~`M3`의 `max_abs_z`(22.1)가 `M0`(7.6)보다 훨씬 크다 — 자산지표를 포함하는 순간 test
+  구간에서 학습 정규화 기준을 크게 벗어나는 값이 나온다는 뜻으로, `model_diagnosis.md`가
+  지적한 분포 드리프트 문제와 일치하는 방향이다(MLflow 아티팩트 `distribution_report.csv`에
+  fold별 최악 이탈 컬럼이 남아있음 — 3개 fold 모두 `feat_SHV_MACD_Hist`/`feat_GLD_MACD_Hist`).
+- 그래도 §4와 같은 경고: 대리모델 값 자체가 전부 작다(|rank-IC|≤0.04). "PASS"는 Baseline보다
+  낫다는 상대적 판정이지 강한 신호라는 뜻이 아니다. RL이 이 순위를 그대로 따를지는 별개이며,
+  최종 판정은 도현 RL + 백테스트 3지표로만 확정된다.

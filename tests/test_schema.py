@@ -6,6 +6,8 @@ docs/state_spec.md가 명시적으로 경고한 실패모드를 전용 테스트
   - 자산 순서 변경
 """
 
+import pytest
+
 from src.data import schema as s
 
 
@@ -70,7 +72,43 @@ def test_feature_names_length_and_blocks():
 
 def test_asset_idx_out_of_range():
     """잘못된 자산 인덱스는 거부."""
-    import pytest
-
     with pytest.raises(IndexError):
         s.returns_slice(5, 30)
+
+
+# ── 피처 콤보(M0~M3) — 실제 지표 이름으로 차원 고정 (config/config.yaml feature_combos와 일치) ──
+
+M0 = ([], ["Equity_Bond_Ratio"])
+M1 = (["MACD_Hist", "Rolling_Vol_20"], ["Equity_Bond_Ratio"])
+M2 = (["MACD_Hist", "Rolling_Vol_20", "RSI_28"], ["Equity_Bond_Ratio"])
+M3 = (["MACD_Hist", "Rolling_Vol_20", "RSI_28"], ["Equity_Bond_Ratio", "Drawdown"])
+
+
+@pytest.mark.parametrize(
+    "asset_feats,market_feats,expected",
+    [(*M0, 156), (*M1, 166), (*M2, 171), (*M3, 172)],
+    ids=["M0", "M1", "M2", "M3"],
+)
+def test_state_dim_per_combo(asset_feats, market_feats, expected):
+    assert s.state_dim(30, len(asset_feats), len(market_feats)) == expected
+
+
+@pytest.mark.parametrize(
+    "asset_feats,market_feats,expected",
+    [(*M0, 156), (*M1, 166), (*M2, 171), (*M3, 172)],
+    ids=["M0", "M1", "M2", "M3"],
+)
+def test_feature_names_and_index_map_per_combo(asset_feats, market_feats, expected):
+    W = 30
+    names = s.feature_names(W, asset_features=asset_feats, market_features=market_feats)
+    assert len(names) == expected
+
+    # 커버리지: 모든 슬라이스가 [0, expected)를 빈틈·겹침 없이 정확히 한 번씩 덮는다
+    covered: list[int] = []
+    for sl in s.index_map(W, len(asset_feats), len(market_feats)).values():
+        covered.extend(range(sl.start, sl.stop))
+    assert sorted(covered) == list(range(expected))
+
+    # 시장지표는 자산별 복제 없이 단일 배치(1,355 오류 회귀) — 컬럼명에 mkt_ 접두어로 1번씩만
+    for feat in market_feats:
+        assert names.count(f"mkt_{feat}") == 1

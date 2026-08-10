@@ -87,6 +87,28 @@ def test_init_idempotent(tmp_path):
     fs.init_meta_db(db)  # 재호출해도 에러 없어야 함
 
 
+def test_init_migrates_legacy_runs_table_without_combo_column(tmp_path):
+    """콤보 시스템 이전(v0.19 이하) meta.sqlite도 init_meta_db 재호출로 combo 컬럼을 받아야 한다.
+
+    CREATE TABLE IF NOT EXISTS는 기존 테이블을 안 건드리므로, 구버전 6컬럼 runs 테이블에
+    write_run이 7번째 값(combo)을 넣으려다 'table runs has 6 columns but 7 values were
+    supplied'로 깨지는 걸 막는 마이그레이션 회귀 테스트.
+    """
+    import sqlite3
+
+    db = str(tmp_path / "meta.sqlite")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """CREATE TABLE runs (
+                run_id TEXT PRIMARY KEY, created_at TEXT, config_hash TEXT,
+                window_w INTEGER, state_dim INTEGER, asset_order TEXT
+            )"""
+        )  # 구버전 6컬럼 스키마 재현
+
+    fs.init_meta_db(db)  # 마이그레이션 수행돼야 함
+    fs.write_run(db, "run1", "2026-08-09T00:00:00", "abc123", 30, 187, list(s.ASSETS), combo="full")
+
+
 # ── build run_id provenance (이슈 #27) ──
 def _write_run_with_fold(db, run_id, created_at, fold_id):
     fs.write_run(db, run_id, created_at, "abc123", 30, s.state_dim(30), list(s.ASSETS))
@@ -177,3 +199,39 @@ def test_config_hash_ignores_non_stat_settings():
     assert base == fs.config_hash(_hash_cfg(transaction_cost=0.002))
     # 소비 측 설정
     assert base == fs.config_hash(_hash_cfg(inference={"model_path": "x.zip"}))
+
+
+# ── 피처 콤보(M0~M3) — resolve_combo로 반영된 features가 해시에 실제로 반영되는지 ──
+
+
+def test_config_hash_differs_across_resolved_combos():
+    """resolve_combo(cfg, combo)로 반영된 cfg를 해시하면 콤보마다 다른 해시가 나와야 한다.
+
+    build.py는 원본 cfg가 아니라 resolved_cfg를 config_hash에 넘긴다 — 그래야
+    latest_run_id_for_config가 다른 콤보의 빌드를 잘못 재사용하지 않는다.
+    """
+    base = _hash_cfg(feature_combos={
+        "full": {"asset": list(s.ASSET_FEATURES), "market": list(s.MARKET_FEATURES)},
+        "M0": {"asset": [], "market": ["Equity_Bond_Ratio"]},
+        "M1": {"asset": ["MACD_Hist", "Rolling_Vol_20"], "market": ["Equity_Bond_Ratio"]},
+    }, active_combo="full")
+
+    from src import config_loader as cl
+
+    hashes = {name: fs.config_hash(cl.resolve_combo(base, name)) for name in ("full", "M0", "M1")}
+    assert len(set(hashes.values())) == 3  # 셋 다 달라야 함
+
+
+def test_config_hash_reacts_to_in_place_combo_edit():
+    """콤보 이름은 안 바뀌었어도 그 콤보의 실제 피처 리스트가 바뀌면 해시도 바뀌어야 한다."""
+    from src import config_loader as cl
+
+    cfg_a = _hash_cfg(
+        feature_combos={"M1": {"asset": ["MACD_Hist"], "market": ["Equity_Bond_Ratio"]}},
+        active_combo="M1",
+    )
+    cfg_b = _hash_cfg(
+        feature_combos={"M1": {"asset": ["MACD_Hist", "RSI_28"], "market": ["Equity_Bond_Ratio"]}},
+        active_combo="M1",
+    )
+    assert fs.config_hash(cl.resolve_combo(cfg_a)) != fs.config_hash(cl.resolve_combo(cfg_b))

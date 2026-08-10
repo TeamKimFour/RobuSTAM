@@ -14,12 +14,13 @@
 | State 인덱스맵 | `src/data/schema.py` | ✅ 구현 |
 | 원시 수집 | `src/data/collect.py` | ✅ 구현 (재시도·품질 게이트 §7-1) |
 | 로그수익률·윈도우 | `src/data/returns.py` | ✅ 구현 |
-| 기술적 지표 6+2 | `src/data/features.py` | ✅ 구현 |
-| 187차원 조립 | `src/data/assemble.py` | ✅ 구현 |
+| 기술적 지표(콤보별 부분집합) | `src/data/features.py` | ✅ 구현 (M0~M3 지원, §3-2) |
+| State 조립(콤보별 D) | `src/data/assemble.py` | ✅ 구현 |
 | walk-forward 분할 | `src/data/splits.py` | ✅ 구현 |
 | z-score 정규화 | `src/data/normalize.py` | ✅ 구현 |
-| Feature Store 입출력 | `src/data/feature_store.py` | ✅ 구현 (scaler_stats·targets 포함) |
-| 빌드 오케스트레이터 | `src/data/build.py` | ✅ 구현 (실데이터 적재) |
+| Feature Store 입출력 | `src/data/feature_store.py` | ✅ 구현 (scaler_stats·targets·콤보별 경로 포함) |
+| 빌드 오케스트레이터 | `src/data/build.py` | ✅ 구현 (실데이터 적재, 콤보별 빌드 지원) |
+| 피처 콤보 스크리닝 + MLflow 기록 | `src/data/screen_combos.py` | ✅ 구현 (M0~M3 실행 완료, §3-2) |
 | Feature Store S3 업로드 | `src/data/s3_sync.py` | ✅ **활성** (2026-07-19 실연결 검증, §7-2) |
 | 파이프라인 컨테이너 | `docker/Dockerfile.pipeline` | ✅ 구현 |
 | 매일 자동 빌드 (CI) | `.github/workflows/daily.yml` | ✅ 구현 |
@@ -49,33 +50,47 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
 
 ## 3. 모듈별 책임
 
-- **`config_loader.py`** — config.yaml을 읽는 단일 통로. `get_state_dim()`이 W에서 차원을
-  산출(187 하드코딩 금지). 서드파티는 PyYAML 하나(함수 내부 import).
+- **`config_loader.py`** — config.yaml을 읽는 단일 통로. `get_state_dim()`이 W·지표 개수에서
+  차원을 산출(187 하드코딩 금지). `resolve_combo(cfg, combo)`가 피처 콤보(M0~M3, §3-2) 선택의
+  유일한 진입점 — 콤보의 `asset`/`market` 리스트를 `cfg["features"]`에 덮어써 반환하므로
+  이후 모듈은 콤보 개념을 몰라도 된다. `get_feature_store_dir`/`get_meta_db`가 콤보별 저장
+  경로를 해석(§3-1). 서드파티는 PyYAML 하나(함수 내부 import).
 - **`schema.py`** — State 인덱스맵의 코드측 SSOT. `returns_slice / asset_feature_slice /
-  market_feature_slice / prev_weight_slice / feature_names / index_map`. 순수 파이썬.
+  market_feature_slice / prev_weight_slice / feature_names / index_map`. 전부 자산·시장 지표
+  개수(또는 이름 리스트)를 인자로 받아 D를 재계산한다(생략 시 카논 6/2 = `full` 콤보). 순수 파이썬.
 - **`collect.py`** — yfinance 조정종가 수집, 공통 거래일 교집합 정렬(`_align`), Parquet 캐시.
   `python -m src.data.collect`로 실행.
 - **`returns.py`** — `log_returns`(첫 행 drop), `return_window(t, W)`(t 포함, 미래 미포함).
-- **`features.py`** — 자산 6지표 + 시장 2지표 계산(pandas-ta). 산식은 state_spec §3-1·config `features.params`.
-  warm-up NaN은 통합 drop(메우기 금지). 컬럼명 = `feat_{asset}_{name}`/`mkt_{name}`.
-- **`assemble.py`** — 수익률 윈도우 + 지표 + prev_weight(0)를 schema 슬라이스로 187 wide 조립.
-  컬럼 = `feature_names(W)`, 시장지표는 자산별 복제 없이 단일 배치.
+- **`features.py`** — 활성 콤보가 요청한 자산·시장 지표만 계산(pandas-ta). 산식은 state_spec §3-1·
+  config `features.params`. `KNOWN_ASSET_FEATURES`/`KNOWN_MARKET_FEATURES`가 계산 가능한 전체
+  지표 카탈로그(config_loader의 콤보 검증이 참조). warm-up NaN은 통합 drop(메우기 금지).
+  컬럼명 = `feat_{asset}_{name}`/`mkt_{name}`.
+- **`assemble.py`** — 수익률 윈도우 + 지표 + prev_weight(0)를 schema 슬라이스로 wide 조립(콤보에
+  따라 폭이 달라짐). 컬럼 = `feature_names(W, asset_features, market_features)`, 시장지표는
+  자산별 복제 없이 단일 배치.
 - **`splits.py`** — Expanding walk-forward `Fold` 생성(`make_folds`). anchor 고정·train 누적,
   test 블록 전진, train↔test 사이 embargo 거래일 갭.
 - **`normalize.py`** — `ZScoreScaler`(fit/transform 분리). μ/σ는 **fold train에서만 fit**,
   valid/test는 적용만. 수익률 per_asset·지표 per_column·prev_weight 제외·std=0 가드. 통계 직렬화(`scaler_stats`).
-- **`build.py`** — 오케스트레이터. 수집→지표→조립→(fold별 train fit→transform)→적재 + `targets`.
-  실행 `python -m src.data.build`.
+  `feat_`/`mkt_` 컬럼을 이름 기반으로 순회하므로 콤보별 폭 변화에 별도 대응 불필요.
+- **`build.py`** — 오케스트레이터. `build(config_path, combo=None)` — 수집→콤보 반영 지표→조립→
+  (fold별 train fit→transform)→적재 + `targets`. `combo` 생략 시 `active_combo`(기본 `full`)를
+  기존 플랫 경로에 적재(하위호환). 실행 `python -m src.data.build`.
 - **`s3_sync.py`** — 로컬 data(raw·feature_store·precompute)를 S3에 업로드(boto3). `meta.sqlite`도
   파일로 업로드(s3:// 직접쓰기 불가 회피). precompute 디렉토리가 없으면(미실행 환경) skip하고
   나머지는 계속 진행한다(§8-2 계약 키와 일치). 버킷 미설정 시 전체 skip. 실행 `python -m src.data.s3_sync`.
+  ⚠️ `feature_store_dir`를 통째로 재귀 업로드하므로 M0~M3 실험 빌드(§3-2)가 그 하위에 쌓이면
+  함께 올라간다 — 로컬 수동 실행 시 주의(§3-2).
 - **`docker/Dockerfile.pipeline`** — collect·build 컨테이너 이미지(Python 3.12·핀 의존성).
 - **`.github/workflows/daily.yml`** — 매일 KST 07:00 cron: collect→build→policy.zip 수신→
-  **precompute(활성, §8-2)**→S3 업로드. S3 연결은 2026-07-19 실연결 검증 완료(§7-2).
-- **`feature_store.py`** — 가공된 187차원 피처의 저장·조회. Parquet 파티션 입출력
+  **precompute(활성, §8-2)**→S3 업로드. S3 연결은 2026-07-19 실연결 검증 완료(§7-2). `build()`를
+  인자 없이 호출하므로 `active_combo`(=`full`, 187차원)만 만든다 — M0~M3 실험 빌드는 이 워크플로에
+  포함되지 않는다.
+- **`feature_store.py`** — 가공된 피처의 저장·조회. Parquet 파티션 입출력
   (`write_features / load_features / partition_path`) + SQLite 메타
-  (`init_meta_db / write_run / write_feature_columns / write_fold / read_*`). I/O 골격 구현 완료,
-  실데이터는 2주차 지표·정규화 후 채움.
+  (`init_meta_db / write_run / write_feature_columns / write_fold / read_*`). 콤보 개념을 몰라도
+  되게 설계됨 — `build.py`가 콤보별로 다른 `out_dir`/`db_path` 문자열을 넘기는 것만으로 분리된다
+  (§3-2). `write_run`은 감사용 `combo` 컬럼을 선택적으로 받는다.
 - **`analyze_features.py`·`screen_features.py`** — 피처 진단(모델 불필요). `analyze_features`는 지표
   예측력(IC)·분포 드리프트, `screen_features`는 대리모델(Ridge·GBM)로 피처셋별 예측력을 비교해
   RL 없이 후보를 거른다(이슈 #34, `docs/model_diagnosis.md`). 실행 `python -m src.data.screen_features`.
@@ -87,15 +102,21 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
 
 ## 3-1. 저장소(Feature Store) 설계
 
-가공된 187차원 피처를 모델 학습·추론에 공급하기 위한 저장 계층. 두 부분으로 구성한다.
+가공된 피처(콤보별 D차원)를 모델 학습·추론에 공급하기 위한 저장 계층. 두 부분으로 구성한다.
 
 ### Parquet — 피처 행렬 (wide 포맷)
 ```
-data/feature_store/fold=<id>/split=<train|valid|test>/part.parquet
+data/feature_store/fold=<id>/split=<train|valid|test>/part.parquet          # active_combo=full (하위호환, 기존 경로 그대로)
+data/feature_store/<combo>/fold=<id>/split=<train|valid|test>/part.parquet  # M0~M3 등 그 외 콤보
 ```
-- **wide 채택**: State는 고정 187차원 밀집 행렬이라 long(녹는) 포맷은 행수 187배 + 조인 비용.
-  wide(date 인덱스 + 187개 피처 컬럼)가 학습 로더에 직접 매핑되어 유리.
-- 컬럼명은 `schema.feature_names(W)` 그대로 사용(`ret_SPY_lag0` … `prevw_SHV`) → 자기설명·차원 검증 용이.
+`config_loader.get_feature_store_dir(cfg, combo)`가 이 분기를 결정한다 — `combo`가 `None`이거나
+`"full"`이면 기존 플랫 경로(하위호환 핵심, `daily.yml`·`train.py`가 그대로 소비), 그 외 콤보는
+`<combo>/` 하위 디렉토리로 분리해 서로 덮어쓰지 않는다(§3-2).
+
+- **wide 채택**: State는 콤보별로 폭이 다른(156~187) 밀집 행렬이라 long(녹는) 포맷은 행수 배수 +
+  조인 비용. wide(date 인덱스 + D개 피처 컬럼)가 학습 로더에 직접 매핑되어 유리.
+- 컬럼명은 `schema.feature_names(W, asset_features, market_features)` 그대로 사용
+  (`ret_SPY_lag0` … `prevw_SHV`) → 자기설명·차원 검증 용이.
 - **fold/split 파티션**: walk-forward 학습의 자연 접근 단위("Fold1의 train만 로드").
 
 ### targets.parquet — 익일 수익률 (보상·백테스트용)
@@ -103,19 +124,80 @@ State 파티션과 같은 폴더에 `targets.parquet` 동반 저장. 컬럼 `fwd
 State와 index 정렬(익일 없는 마지막 행 drop). **정규화 안 함**(실제 수익률 스케일). `load_targets`로 로드.
 정규화된 State(관측)로는 보상을 계산할 수 없으므로, 형우 환경·찬휘 백테스트가 이 파일을 join해 사용한다.
 
-### SQLite — 메타DB (`data/feature_store/meta.sqlite`)
+### SQLite — 메타DB (`data/feature_store/meta.sqlite`, 콤보별로 분리 — 아래 §3-2)
 데이터 산출물은 `.gitignore`(`/data/`)되므로, "어떤 config·통계로 만들어졌나"의 **감사 기록**이자
 추론(도현) 재사용 근거. 테이블:
 
 | 테이블 | 내용 | 채우는 시점 |
 |---|---|---|
-| `runs` | config 스냅샷(W·state_dim·자산순서·config_hash) | 1주차 |
-| `feature_columns` | 187개 컬럼명·인덱스 (차원 감사) | 1주차 |
+| `runs` | config 스냅샷(W·state_dim·자산순서·config_hash·**combo**) | 1주차, combo 컬럼은 3주차 |
+| `feature_columns` | D개 컬럼명·인덱스 (차원 감사, D는 콤보마다 다름) | 1주차 |
 | `folds` | 각 fold train/valid/test 날짜 경계·embargo | ✅ (splits) |
 | `scaler_stats` | 정규화 평균·표준편차 (추론 재사용) | ✅ (normalize) |
 
 > 데이터 소스는 **yfinance 단일**이다. 초기 기획서의 KRX·FinRL은 저장소 문서(CLAUDE.md 스택·state_spec)에
 > 없고, 고정 US ETF 유니버스 5종이 모두 yfinance로 커버되므로 채택하지 않는다.
+
+---
+
+## 3-2. 피처 콤보 시스템 (M0~M3, 3주차 — 이슈 #34 후속)
+
+`schema.py`/`config_loader.py`가 D를 config에서 산출하도록 일반화된 것(§2 v1.1, PR #68)을
+바탕으로, 실제로 이름 붙은 콤보를 골라 빌드할 수 있게 한 얇은 레이어. `docs/state_spec.md` §2가
+SSOT(콤보 카탈로그·차원 표).
+
+**구성**:
+- `config.yaml`의 `feature_combos`(콤보 이름 → `asset`/`market` 지표 리스트) + `active_combo`
+  (기본 `"full"`).
+- `config_loader.resolve_combo(cfg, combo=None)` — 콤보(생략 시 `active_combo`)의 리스트로
+  `cfg["features"]`를 덮어쓴 새 cfg를 반환. 이후 `compute_features`/`assemble_state_matrix`/
+  `get_state_dim`은 이 cfg만 보면 되고 콤보라는 개념 자체를 몰라도 된다.
+- `build.py`가 `build(config_path, combo="M0")`처럼 콤보를 명시하면, `resolve_combo`로 반영된
+  cfg로 지표를 계산하고 `get_feature_store_dir`/`get_meta_db`가 정해준 콤보별 경로에 적재한다.
+  `config_hash`도 (resolved cfg 기준이라) 콤보마다 자동으로 달라져, 서로 다른 콤보의 빌드가
+  `latest_run_id_for_config` 자동 해석에서 뒤섞이지 않는다.
+
+**M0~M3 실제 빌드**(오케스트레이터 없음 — 콤보 수가 적어 개별 호출로 충분):
+```bash
+python -c "from src.data.build import build; [build(combo=c) for c in ('M0','M1','M2','M3')]"
+```
+실행 완료 — `data/feature_store/{M0,M1,M2,M3}/`에 실데이터로 156/166/171/172차원 Feature Store가
+존재한다(`full`은 기존 `data/feature_store/` 그대로).
+
+**스크리닝 + MLflow 기록** — `src/data/screen_combos.py` (신규):
+```bash
+python -m src.data.screen_combos   # M0~M3 각각 Ridge/GBM rank-IC·R²·mean|IC|·max|z| 계산 + MLflow run 기록
+```
+`screen_features.py`는 이미 빌드된 `full`(187) Feature Store에서 컬럼만 골라 쓰지만, `M2`/`M3`의
+`RSI_28`·`Drawdown`은 그 안에 아예 없는 신규 지표라(콤보 전용 빌드에만 존재) 이 방식으로는
+스크리닝할 수 없다. `screen_combos.py`는 콤보별 **자기 Feature Store**를 대상으로 삼는다.
+콤보별 MLflow run(`run_type=screening`)에 파라미터(`feature_set`·`state_dim`·
+`feature_store_run_id`·`config_hash`·`asset_features`·`market_features`·`drawdown_lookback`·
+`git_commit`)·메트릭(`mean_abs_ic`·`ridge_rank_ic`·`ridge_r2`·`gbm_rank_ic`·`gbm_r2`·`max_abs_z`)·
+아티팩트(`feature_manifest.json`·`resolved_config.yaml`·`screening_result.csv`·
+`distribution_report.csv`)를 기록한다. `config.model.mlflow_tracking_uri`(기본 로컬 파일스토어
+`mlruns/`)를 그대로 쓰므로 Docker·팀 공용 DB 없이 로컬에서 즉시 확인 가능(팀 공용 Supabase로
+옮기면 같은 코드가 자동으로 그쪽에 기록한다 — URI만 바뀜).
+
+> mlflow-skinny 3.14+는 순수 파일 트래킹 스토어가 기본 "유지보수 모드"라 예외를 던진다.
+> `train.py`/`select.py`와 동일하게 `MLFLOW_ALLOW_FILE_STORE=true`를 코드에서 설정해 우회한다
+> (DB 백엔드로 옮기기 전까지의 임시 조치, §찬휘 Supabase 이전 완료 시 재검토).
+
+**현재 범위와 남은 연결고리**:
+- ✅ `src/data/` 전체 — 콤보별 Feature Store 빌드·스크리닝·MLflow 기록 가능(실행 완료).
+- ⏳ `src/env`·`src/models/train.py`는 여전히 `active_combo`(=`full`)만 소비한다. M0~M3를
+  실제 RL 학습·백테스트에 연결하려면 이 두 모듈이 `cfg["active_combo"]`를 인식하도록 후속
+  작업이 필요하다(담당: 도현). `train.py`가 combo를 받으면 `config_loader.resolve_combo`로
+  얻은 cfg를 `PortfolioEnv`에 넘기고, `get_feature_store_dir`/`get_meta_db`로 해당 콤보의
+  경로를 읽으면 된다 — env·추론 쪽은 PR #68 덕분에 이미 콤보가 반영된 cfg를 그대로 소비한다.
+- ⚠️ `s3_sync.py`는 `feature_store_dir`를 통째로 재귀 업로드한다. 기본 디렉토리 밑에 M0~M3가
+  쌓이므로, 로컬에서 `python -m src.data.s3_sync`를 직접 돌리면 실험용 콤보 산출물까지 팀
+  공용 S3에 올라갈 수 있다. `daily.yml`(CI)은 콤보 빌드를 호출하지 않아 안전하다.
+- ✅ `M0`(K_asset=0, D=156)은 PR #68 검증 범위(K_asset∈{2,3})에 없던 조합이라 env·모델
+  왕복이 검증된 적이 없었다(도현 리뷰, PR #69). `tests/test_variable_state_dim.py`의
+  `VARIANTS`에 D=156 케이스를 추가해 확인 — PortfolioEnv·DiscretePortfolioEnv·PPO
+  save/load 왕복·cross-dim 로드 거부까지 전부 정상 동작한다(자산 피처 블록이 전부
+  비어도 조립·슬라이스·SB3 MlpPolicy 입력 크기 결정에 문제없음).
 
 ---
 
@@ -502,3 +584,5 @@ S3에 업로드될 수 있는** 검증되지 않은 경로였다. `get_precomput
 | v0.17 | 2026-07-25 | 도현 정식 리뷰(PR #47) 반영: `policy.zip 수신`·`precompute` 스텝에 `continue-on-error: true` 추가 — 실패해도 뒤의 `S3 업로드`(raw·feature_store)가 계속 돌도록 데이터 갱신과 모델 추론 성공을 분리. `sync_dir_to_s3`가 `*.tmp` 잔여물을 업로드 대상에서 제외하도록 방어 추가. gate 조건이 버킷 미확인이라는 지적은 경미로 판단해 후속으로 미룸. |
 | v0.18 | 2026-07-25 | 셀프리뷰로 발견: `s3_sync.py`가 `data.precompute_path`를 `d["precompute_path"]`로 직접 읽어 다른 소비자(precompute.py·s3_fetch.py·api/main.py)와 다른 config 접근 통로를 썼고, 그 값에 디렉토리 구성요소가 없으면(`Path(...).parent`가 cwd) 작업 디렉토리 전체가 업로드될 수 있었다. `get_precompute_path()`로 통일하고, `_precompute_upload_dir()` 가드로 그런 경우 빈 문자열을 돌려줘 안전하게 skip하도록 수정. |
 | v0.19 | 2026-07-28 | §8-3 순서에 백테스트 리포트 스텝 추가: `daily.yml`이 precompute 뒤·S3 업로드 앞에서 `python -m src.backtest.export --upload-s3`를 실행(같은 gate·continue-on-error 패턴). 상세는 `docs/backtest_engine.md` §4-4. |
+| v0.20 | 2026-08-09 | §3-2 신설: 피처 콤보 시스템(M0~M3, PR #68의 가변 D 배관 위에 `config.yaml` `feature_combos`/`active_combo` + `config_loader.resolve_combo` 추가). `features.py`가 콤보가 요청한 지표만 계산하도록 일반화(`RSI_28`·`Drawdown` 신규). §3-1 저장소 경로를 콤보별 분기로 갱신(`full`은 기존 경로 유지, 하위호환). M0~M3 실데이터 빌드 완료(`data/feature_store/{M0,M1,M2,M3}/`). `src/data/screen_combos.py` 신규: 콤보별 Ridge/GBM rank-IC·R²·mean\|IC\|·분포드리프트를 계산해 MLflow(`run_type=screening`)에 기록, 로컬 파일스토어 사용(`MLFLOW_ALLOW_FILE_STORE` 우회 포함). `active_combo` 기본값 `full`이라 env·train.py·daily.yml은 무영향 — 실제 RL 연결은 후속 작업(도현). |
+| v0.21 | 2026-08-09 | 도현 PR #69 리뷰 반영: (1) verdict 판정을 `sign_stable_frac`(콤보마다 분모가 달라 비교 불가) 게이트에서 콤보 간 직접 비교 가능한 `ridge_rank_ic`/`gbm_rank_ic` 기준으로 교체, `n_unstable_features`(절대량) 메트릭 추가 — M2·M3가 FAIL→PASS로 정정됨(`docs/feature_candidates.md` §5-1). (2) 스크리닝 MLflow run을 `robustam-ppo`(RL 학습)와 분리된 `robustam-screening` experiment로 이동. (3) 구버전 `meta.sqlite`(콤보 도입 전)에 `combo` 컬럼 마이그레이션 추가 — `runs` 테이블 6→7컬럼 불일치로 재빌드가 깨지던 문제 실제 재현 후 수정. (4) `tests/test_variable_state_dim.py`에 D=156(K_asset=0, M0) 케이스 추가 — 형우 PR #68 검증 범위(K_asset∈{2,3})에 없던 조합이었음을 리뷰로 발견, env·PPO 왕복 정상 확인. |

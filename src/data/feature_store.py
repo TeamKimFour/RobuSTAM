@@ -61,7 +61,7 @@ def load_features(out_dir: str, fold_id: int, split: str) -> pd.DataFrame:
 
 # ── SQLite 메타DB ──
 def init_meta_db(db_path: str) -> None:
-    """메타DB 스키마를 생성한다(존재하면 무시)."""
+    """메타DB 스키마를 생성한다(존재하면 무시). 기존 DB는 신규 컬럼을 마이그레이션한다."""
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.executescript(
@@ -72,7 +72,8 @@ def init_meta_db(db_path: str) -> None:
                 config_hash TEXT,
                 window_w INTEGER,
                 state_dim INTEGER,
-                asset_order TEXT
+                asset_order TEXT,
+                combo TEXT
             );
             CREATE TABLE IF NOT EXISTS folds (
                 run_id TEXT, fold_id INTEGER, mode TEXT,
@@ -93,6 +94,11 @@ def init_meta_db(db_path: str) -> None:
             );
             """
         )
+        # 마이그레이션: 콤보 시스템 이전(v0.19 이하)에 만들어진 meta.sqlite는 CREATE TABLE
+        # IF NOT EXISTS로는 새 combo 컬럼을 못 받는다 — 있으면 스킵, 없으면 추가한다.
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+        if "combo" not in cols:
+            conn.execute("ALTER TABLE runs ADD COLUMN combo TEXT")
 
 
 def write_run(
@@ -103,12 +109,18 @@ def write_run(
     window_w: int,
     state_dim: int,
     asset_order: list[str],
+    combo: str | None = None,
 ) -> None:
-    """run 메타(설정 스냅샷)를 기록한다."""
+    """run 메타(설정 스냅샷)를 기록한다.
+
+    combo: 이 run을 만든 피처 콤보 이름(M0~M3 등, 감사용). 콤보별로 meta.sqlite 자체가
+    분리되므로(config_loader.get_meta_db) 필수는 아니지만, 어느 콤보의 빌드였는지 한눈에
+    보이도록 남긴다. 생략(None)해도 기존 호출부는 그대로 동작한다.
+    """
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?)",
-            (run_id, created_at, config_hash, window_w, state_dim, json.dumps(asset_order)),
+            "INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?)",
+            (run_id, created_at, config_hash, window_w, state_dim, json.dumps(asset_order), combo),
         )
 
 
