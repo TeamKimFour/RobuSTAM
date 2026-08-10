@@ -280,6 +280,66 @@ def test_run_experiment_end_to_end_two_combos(tmp_path):
     assert saved["combos"].keys() == results["combos"].keys()
 
 
+def test_run_experiment_logs_test_metrics_to_mlflow(tmp_path):
+    """백테스트(test) 지표가 학습 run에 되붙어야 한다.
+
+    train.py는 valid split만 기록한다. 팀 주간계획 기록 항목과 형우 시각화가 요구하는
+    test 샤프·MDD·회전율·비중편차는 백테스트에서 나오므로, JSON에만 남기면 팀 공용
+    MLflow만 보고는 콤보를 비교할 수 없다.
+    """
+    pytest.importorskip("stable_baselines3")
+    pytest.importorskip("mlflow")
+
+    from mlflow.tracking import MlflowClient
+
+    from src.models.experiment import ExperimentSettings, run_experiment
+    from src.models.train import _to_tracking_uri
+
+    base = tmp_path / "feature_store"
+    _seed_combo_store(base, "M1", M1_ASSET, M1_MARKET, 1, 3)
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.dump(_e2e_cfg(str(base), tmp_path)), encoding="utf-8")
+
+    results = run_experiment(
+        combos=["M1"],
+        settings=ExperimentSettings(fold_ids=[1], seed=7, total_timesteps=8),
+        config_path=str(config_path),
+        out_path=str(tmp_path / "verdict.json"),
+    )
+
+    mlflow_run_id = results["combos"]["M1"]["runs"][0]["mlflow_run_id"]
+    run = MlflowClient(
+        tracking_uri=_to_tracking_uri(str(tmp_path / "mlruns"))
+    ).get_run(mlflow_run_id)
+
+    # 팀 주간계획 기록 항목 — valid만이 아니라 test 쪽도 전부 있어야 한다.
+    for key in (
+        "test_sharpe",
+        "test_mdd",
+        "test_avg_turnover",
+        "test_weight_dispersion",
+        "test_total_cost",
+        "test_sharpe_gap_vs_1n",
+        "test_bench_1n_sharpe",
+        "verdict_adopted",
+    ):
+        assert key in run.data.metrics, f"MLflow에 {key}가 없습니다"
+
+    # 학습 시점 params도 그대로 남아 있어야 한다(되붙이기가 덮어쓰지 않는지).
+    assert run.data.params["feature_set"] == "M1"
+    assert run.data.params["state_dim"] == "166"
+    assert "valid_sharpe" in run.data.metrics
+
+    # JSON과 MLflow의 값이 일치해야 한다(두 기록이 갈라지면 비교가 깨진다).
+    verdict = results["combos"]["M1"]["verdict"]
+    assert run.data.metrics["verdict_adopted"] == float(verdict["adopted"])
+    assert run.data.metrics["test_weight_dispersion"] == pytest.approx(
+        verdict["per_fold"][0]["weight_dispersion"]
+    )
+    assert run.data.tags["verdict"] in ("ADOPTED", "REJECTED")
+
+
 def test_run_experiment_fails_fast_on_missing_build(tmp_path):
     """build 안 된 콤보가 섞이면 학습을 시작하기 전에 멈춰야 한다.
 

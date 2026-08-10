@@ -199,6 +199,65 @@ def combo_provenance(cfg: dict, combo: str, fold_id: int) -> dict[str, Any]:
     }
 
 
+def _mlflow_client(cfg: dict):
+    """train.py와 같은 tracking uri 규칙으로 MlflowClient를 만든다."""
+    import os
+
+    # 파일 스토어가 기본 비활성이라 명시 허용 (train.py·screen_combos.py와 동일 임시 조치).
+    os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+    from mlflow.tracking import MlflowClient
+
+    from src.models.train import _to_tracking_uri
+
+    uri = _to_tracking_uri(cfg.get("model", {}).get("mlflow_tracking_uri", "mlruns"))
+    return MlflowClient(tracking_uri=uri)
+
+
+def log_backtest_to_run(cfg: dict, mlflow_run_id: str, run_result: dict, fm: FoldMetrics) -> None:
+    """백테스트(test split) 지표를 그 fold를 학습한 MLflow run에 되붙인다.
+
+    train.py는 valid split만 기록한다(학습 중 조기 확인용). 그런데 팀 주간계획이 요구하는
+    기록 항목과 형우 시각화(콤보별 fold 샤프·MDD·회전율·비중편차)는 **test 지표**다.
+    그 값은 백테스트를 돌려야 나오므로 학습 run이 닫힌 뒤에 client로 추가 기록한다.
+
+    JSON에만 남기면 팀 공용 DB를 쓰는 의미가 없어진다 — 형우가 MLflow만 보고 비교할 수
+    있게 하는 것이 이 함수의 목적이다.
+    """
+    client = _mlflow_client(cfg)
+    policy = run_result["strategies"]["RL policy"]
+    metrics = {
+        "test_sharpe": float(policy["sharpe"]),
+        "test_total_return": float(policy["total_return"]),
+        "test_mdd": float(policy["mdd"]),
+        "test_avg_turnover": float(policy["avg_turnover"]),
+        "test_total_cost": float(policy["total_cost"]),
+        # 3지표 중 비중편차는 summarize()에 없어 러너가 보완해 계산한 값이다.
+        "test_weight_dispersion": float(fm.weight_dispersion),
+        "test_sharpe_gap_vs_1n": float(fm.sharpe_gap_vs_1n),
+        "test_beats_1n": float(fm.beats_1n),
+    }
+    # 벤치마크 샤프도 같이 남긴다 — 형우가 비교 그래프를 그릴 때 재계산이 필요 없도록.
+    for name, key in (("1/N", "1n"), ("60:40", "60_40"), ("B&H", "bh")):
+        bench = run_result["strategies"].get(name)
+        if bench is not None:
+            metrics[f"test_bench_{key}_sharpe"] = float(bench["sharpe"])
+            metrics[f"test_bench_{key}_mdd"] = float(bench["mdd"])
+
+    for key, value in metrics.items():
+        client.log_metric(mlflow_run_id, key, value)
+
+
+def log_verdict_to_runs(cfg: dict, mlflow_run_ids: list[str], verdict: dict) -> None:
+    """콤보 판정 결과를 그 콤보의 모든 fold run에 붙인다(판정은 fold 통합이라 run마다 같은 값)."""
+    client = _mlflow_client(cfg)
+    for run_id in mlflow_run_ids:
+        client.log_metric(run_id, "verdict_adopted", float(verdict["adopted"]))
+        client.log_metric(run_id, "verdict_gate_passed", float(verdict["gate_passed"]))
+        client.log_metric(run_id, "verdict_performance_passed", float(verdict["performance_passed"]))
+        client.set_tag(run_id, "verdict", "ADOPTED" if verdict["adopted"] else "REJECTED")
+        client.set_tag(run_id, "verdict_reasons", " | ".join(verdict["reasons"]))
+
+
 @dataclass
 class ExperimentSettings:
     """모든 콤보에 **동일하게** 적용되는 학습·판정 조건 (비교 실험의 전제).
@@ -264,7 +323,10 @@ def run_experiment(
             )
             model = PPO.load(trained["model_path"])
             run_result = run_fold(fold_id, model, config_path, st.split, combo=combo)
-            fold_metrics.append(fold_metrics_from_run(run_result, assets))
+            fm = fold_metrics_from_run(run_result, assets)
+            fold_metrics.append(fm)
+            # test 지표를 학습 run에 되붙인다 — 팀 공용 MLflow만 보고 콤보 비교가 되도록.
+            log_backtest_to_run(cfg, trained["run_id"], run_result, fm)
             runs.append(
                 {
                     "fold_id": fold_id,
@@ -275,10 +337,12 @@ def run_experiment(
                 }
             )
 
+        verdict = judge_combo(fold_metrics, st.criteria)
+        log_verdict_to_runs(cfg, [r["mlflow_run_id"] for r in runs], verdict)
         results["combos"][combo] = {
             "provenance": provenance[combo],
             "runs": runs,
-            "verdict": judge_combo(fold_metrics, st.criteria),
+            "verdict": verdict,
         }
 
     results["adopted"] = [n for n, r in results["combos"].items() if r["verdict"]["adopted"]]
