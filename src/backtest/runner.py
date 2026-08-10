@@ -189,6 +189,11 @@ def main() -> None:
 
     from stable_baselines3 import PPO
 
+    from src.config_loader import force_utf8_stdout
+
+    # 한글 리포트 출력이 cp949 콘솔에서 깨지지 않도록 고정(train.py와 동일 규약).
+    force_utf8_stdout()
+
     parser = argparse.ArgumentParser(description="Walk-forward 백테스트: policy vs 벤치마크")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--fold-id", type=int, default=None, help="생략 시 config.split 전체 fold 순회")

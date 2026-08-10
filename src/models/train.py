@@ -29,7 +29,12 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from src.config_loader import get_active_combo, get_state_dim, load_config_for_combo
+from src.config_loader import (
+    force_utf8_stdout,
+    get_active_combo,
+    get_state_dim,
+    load_config_for_combo,
+)
 from src.data import feature_store as fs
 from src.env.portfolio_env import PortfolioEnv
 
@@ -302,6 +307,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
+    force_utf8_stdout()  # MLflow http 트래킹의 이모지 출력이 cp949에서 터지는 것 방지
     args = _parse_args()
     result = train(
         args.config,

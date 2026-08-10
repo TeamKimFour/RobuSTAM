@@ -357,6 +357,12 @@ def main() -> None:
     """CLI — 콤보 실험 실행."""
     import argparse
 
+    from src.config_loader import force_utf8_stdout
+
+    # 콤보 x fold마다 MLflow가 실행 URL(이모지 포함)을 찍는다. cp949 콘솔에서 여기가
+    # 터지면 run이 RUNNING으로 남아 select.py에서 빠지므로 진입점에서 먼저 고정한다.
+    force_utf8_stdout()
+
     parser = argparse.ArgumentParser(description="피처 콤보 실험 + 3지표 자동 판정")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument(

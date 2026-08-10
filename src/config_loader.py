@@ -16,6 +16,7 @@ State 차원 수식 (state_spec.md §2):
 자동으로 새 state_dim을 뽑아 환경·모델·API가 그대로 소비할 수 있다.
 """
 
+import sys
 from pathlib import Path
 
 from src.data import schema
@@ -221,6 +222,24 @@ def resolve_paths_for_combo(cfg: dict, combo: str | None = None) -> dict:
         "meta_db": get_meta_db(cfg, combo),
     }
     return resolved
+
+
+def force_utf8_stdout() -> None:
+    """콘솔 출력 인코딩을 UTF-8로 고정한다 (CLI 진입점에서만 호출).
+
+    Windows 기본 콘솔은 cp949라 MLflow가 http 트래킹 서버를 쓸 때 찍는 실행 URL 줄
+    (🏃 이모지 포함)에서 UnicodeEncodeError가 난다. 이 예외가 `mlflow.end_run()` 안의
+    `set_terminated` 도중에 터지면 **run이 RUNNING 상태로 남아** `select.py`의
+    `status='FINISHED'` 필터에서 통째로 빠진다 — 학습은 됐는데 배포 후보로 안 잡히는
+    조용한 실패라 진입점에서 미리 막는다.
+
+    라이브러리 사용(다른 모듈이 train()을 import해 쓰는 경우)에는 전역 상태를 건드리지
+    않도록 `__main__` 블록에서만 부른다.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
 
 
 def get_active_combo(cfg: dict, combo: str | None = None) -> str | None:
