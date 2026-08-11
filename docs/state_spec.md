@@ -1,4 +1,4 @@
-# RobuSTAM — State(관측공간) 명세서 v1.2
+# RobuSTAM — State(관측공간) 명세서 v1.3
 
 > **상태: 확정(권장안 채택)** · 부속결정 ①②③ 기본값으로 확정 완료(회의에서 통보)
 > 본 문서는 형우(Gym 환경) · 도현(SB3 모델) · 민지(Feature Store)가 공유하는 **단일 인터페이스 계약**이다.
@@ -167,6 +167,12 @@ observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(state_dim,), dty
   같은 원칙으로 config에서 온다. 민지 Feature Store가 지표 셋을 바꿔도 `schema.state_dim`·
   `schema.prev_weight_slice`·`schema.feature_names`가 그 개수를 인자로 받아 슬라이스를
   재계산하므로 env/추론 파이프라인이 자동으로 새 D를 소비한다.
+- **v1.3 M0(K_asset=0) 소비자 검증 완료:** `tests/test_m0_env_consumer.py`가 자산 지표
+  블록이 통째로 비는 M0(D=156)에서 env 소비자 계약을 다각도로 검증한다 — 빈 자산
+  슬라이스, market 시작 위치, `feature_names`가 `feat_*`를 만들지 않음, `assemble` →
+  `PortfolioEnv` 결합, 다중 스텝 진행, 룩어헤드 방어, turnover·cost 이론값 일치,
+  DiscretePortfolioEnv 이산 액션(hold·+Δ·-Δ) 계약. PR #69 리뷰 후속(도현→형우, M0
+  RunPod 학습 준비).
 
 ---
 
@@ -177,3 +183,4 @@ observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(state_dim,), dty
 | v1.0 | 2026-06-28 | 최초 작성. 187 권장안 확정, 부속결정 ①②③ 명시. |
 | v1.1 | 2026-08-05 | K_asset·K_market도 config에서 산출. schema 헬퍼가 인자를 받아 D 가변 지원(D=166/171/172 검증). |
 | v1.2 | 2026-08-08 | 피처 콤보 M0~M3 확정(§2, `config.yaml` `feature_combos`/`active_combo`). `RSI_28`·`Drawdown`(시장) 신규 지표 추가(§3-1), `drawdown_lookback`은 2026-08-09 60일로 확정(252일 대안 검토 후). `full`(하위호환, D=187)이 기본 콤보로 유지됨 — env/train.py 실연결은 후속 작업. |
+| v1.3 | 2026-08-11 | M0(K_asset=0, D=156) env 소비자 계약 심층 검증 추가(`tests/test_m0_env_consumer.py` 16개). PR #69 리뷰 후속으로 도현이 M0을 RunPod 학습 후보로 예고한 데 대응. schema 슬라이스·assemble·다중 스텝·룩어헤드·비용·이산 액션까지 M0 특유 상황을 명시적으로 커버. |
