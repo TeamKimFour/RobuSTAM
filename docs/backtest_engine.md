@@ -184,20 +184,35 @@ fold_id ∈ {1..len(config.split.test_blocks)}  (1부터, splits.py 관례)
 이전(2주차)엔 이 규칙이 없어 스모크 테스트 run(`20260713_smoke-test`) 1건만 S3에 존재했다
 — 실제 벤치마크 3종을 저장한 선례는 없었다. 지금부터는 fold마다 4개 run이 쌓인다.
 
-### CLAUDE.md §1 판정 — 샤프 15%+ 개선 또는 MDD 20%+ 방어
-벤치마크 대비 다음 중 **하나라도** 만족하면 `beats_target=True`:
+### 하이브리드 판정 — 성과(CLAUDE.md §1) AND 정상성(이슈 #46, 팀 확정)
+`beats_target=True`는 두 축을 **AND**로 결합한다.
+
+**① 성과 — 벤치마크마다 따로 계산**, 다음 중 하나라도 만족:
 ```
 sharpe_improvement_pct = (policy.sharpe - benchmark.sharpe) / |benchmark.sharpe|   ≥ 0.15
 mdd_defense_pct        = (|benchmark.mdd| - |policy.mdd|) / |benchmark.mdd|        ≥ 0.20
 ```
-분모가 0이면(벤치마크 샤프·MDD가 정확히 0) `nan`으로 두고 `beats_target=False` 처리한다
+분모가 0이면(벤치마크 샤프·MDD가 정확히 0) `nan`으로 두고 해당 조건은 `False` 처리한다
 (0으로 나누기 방지 — 판정 불능을 "달성"으로 오판하지 않도록).
 
-### 결과 딕셔너리 — 이슈 #46 확장 여지
+**② 정상성 — policy 자체의 절대적 속성**(비교 대상 벤치마크와 무관해 한 번만 계산하고
+모든 벤치마크 비교에 공통 적용), 둘 다 만족해야 함:
+```
+weight_deviation_ok = policy.weight_deviation ≥ WEIGHT_DEVIATION_TARGET (0.05)   # 60:40 흉내 방지
+turnover_ok         = policy.avg_turnover     ≤ TURNOVER_TARGET (0.3)            # 과매매 방지
+```
+`weight_deviation`(`policy.summarize()`가 계산)은 60:40 벤치마크 대비 Active Share를
+매일 계산해 기간 평균한 값이다: `mean_over_days(0.5 * Σ|policy_wᵢ - benchmark_wᵢ|)`.
+이슈 #34에서 낮은 learning_rate가 1/N에 수렴해 편차 0에 가까운 채로 좋은 샤프를 내는
+"패시브 흉내"가 관찰됐던 것이 이 하한선의 도입 배경이다.
+
+`out[name]`에는 `weight_deviation_ok`/`turnover_ok`도 함께 담겨 있어, 어떤 벤치마크
+비교든 policy가 왜 떨어졌는지(성과 부족 vs 정상성 미달) 바로 확인할 수 있다.
+
+### 결과 딕셔너리
 `run_fold()`가 반환하는 `strategies`/`comparison`의 값은 `policy.summarize()`가 만드는
-순수 dict를 그대로 옮긴 것이다. 이슈 #46(비중편차·회전율 판정 기준)이 팀 합의되면
-`summarize()`가 반환하는 dict에 키만 추가하면 되고, `runner.py`·저장·출력 로직은 손댈
-필요가 없다 — 지금은 일부러 그 키를 넣지 않았다.
+순수 dict를 그대로 옮긴 것이다 — `summarize()`에 새 키가 추가돼도 `runner.py`·저장·출력
+로직은 그대로 담아 옮기기만 하므로 손댈 필요가 없다.
 
 ### CLI
 `policy.py`의 `--fold-id`/`--split`/`--model-path`/`--initial-nav` 패턴을 그대로 따른다.
@@ -249,11 +264,11 @@ FE(`frontend/app/backtest/`)가 소비하는 정적 파일 `frontend/public/back
   값이라, 익스포터가 이어붙인 시계열에서 CAGR·Sharpe·MDD·Vol을 다시 계산해 표에 노출한다.
 - **파일 미존재 → mock fallback**: 로컬 개발·모델 미학습 환경에서 JSON이 없으면 loader가
   `mock.ts`로 조용히 넘어가고 뱃지가 "합성 데이터"로 표시된다. 코드에 절대 하드코딩된 값 없음.
-- **`verdict_summary`(`_summarize_verdict()`)**: 벤치마크별로 CLAUDE.md §1 판정
-  (`comparison[name]["beats_target"]`)을 만족한 fold 개수·비율만 집계한다. 이슈 #46
-  (비중편차·회전율 등 판정 기준)이 팀 미확정이라 `"overall_pass"` 같은 이분법 합격/불합격
-  필드는 일부러 넣지 않았다 — 숫자만 내고 판정은 사람이 한다. `loader.ts`는 아직 이 키를
-  읽지 않는다(옵셔널 필드라 추가해도 FE 동작에 영향 없음).
+- **`verdict_summary`(`_summarize_verdict()`)**: 벤치마크별로 하이브리드 판정
+  (`comparison[name]["beats_target"]` — 성과 AND 정상성, §4-3)을 만족한 fold 개수·비율만
+  집계한다. `"overall_pass"` 같은 이분법 합격/불합격 필드는 일부러 넣지 않았다 — 숫자만
+  내고 최종 판정은 사람이 한다. `loader.ts`는 아직 이 키를 읽지 않는다(옵셔널 필드라
+  추가해도 FE 동작에 영향 없음).
 
 ### CLI
 ```bash
@@ -335,3 +350,4 @@ python -m src.backtest.export      s3://{bucket}/{prefix}/frontend/         node
 | v0.6 | 2026-07-27 | §4-4 추가: `export.py`(FE 대시보드용 JSON 익스포터) 구현. `run_fold()`에 `nav_by_strategy` 필드 추가(additive). 4주 잔여 FE mock→실데이터 교체(수익곡선·벤치마크표·fold표 3위젯). 확장 지표(quantstats·기여도·상관 등)는 6주 작업에서 교체 예정. |
 | v0.7 | 2026-07-27 | §4-4에 Vercel 배포 데이터 확보 흐름 추가. `export.py --upload-s3` + `frontend/scripts/fetch-backtest.mjs`(prebuild 훅)로 백엔드→S3→Vercel 파이프라인 구축. `BACKTEST_JSON_URL` 미설정 시 mock으로 조용히 fallback. |
 | v0.8 | 2026-07-28 | `_summarize_verdict()` 추가 — 벤치마크별 fold 통과 개수·비율(`verdict_summary`)을 JSON 계약에 포함. 이슈 #46 판정 기준 미확정이라 이분법 합격/불합격 필드는 넣지 않음. `daily.yml`에 `export.py --upload-s3` 스텝을 precompute 뒤·S3 업로드 앞에 추가(같은 gate·continue-on-error 패턴). |
+| v0.9 | 2026-07-30 | 이슈 #46 팀 확정 반영: `policy.summarize()`에 `weight_deviation`(60:40 대비 Active Share 기간평균) 추가, `runner._compare_to_benchmarks()`를 하이브리드 판정(성과 OR AND 정상성 AND)으로 변경. `WEIGHT_DEVIATION_TARGET`(0.05)·`TURNOVER_TARGET`(0.3) 신설. `comparison[name]`에 `weight_deviation_ok`/`turnover_ok` 필드 추가(디버깅용). `_summarize_verdict()`는 로직 변경 없이 이 새 `beats_target`을 그대로 집계. |

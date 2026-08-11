@@ -140,7 +140,7 @@ def test_summarize_verdict_counts_passed_folds():
     assert out["1/N"] == {"folds_passed": 2, "folds_total": 3, "pass_rate": pytest.approx(2 / 3)}
     assert out["60:40"] == {"folds_passed": 0, "folds_total": 3, "pass_rate": 0.0}
     assert out["B&H"] == {"folds_passed": 2, "folds_total": 3, "pass_rate": pytest.approx(2 / 3)}
-    # 이분법 합격/불합격 필드는 넣지 않는다(팀 §1 기준 미확정 — 이슈 #46).
+    # 이분법 합격/불합격 필드는 넣지 않는다 — beats_target을 fold 개수·비율로만 집계한다.
     for v in out.values():
         assert "overall_pass" not in v
 

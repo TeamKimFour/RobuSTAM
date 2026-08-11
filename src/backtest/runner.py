@@ -6,12 +6,13 @@
     3) 넷 다 `policy.summarize()`로 지표(총수익·샤프·MDD·회전율·누적비용)를 뽑고,
        `s3_results.save_results_to_s3()`(수정 없음, 그대로)로 **각각 별도 run**으로 저장한다.
        run_id 규칙(팀 확정): `fold{N}_policy` / `fold{N}_1n` / `fold{N}_60_40` / `fold{N}_bh`.
-    4) CLAUDE.md §1 판정 기준(벤치마크 대비 샤프 15%+ 개선 **또는** MDD 20%+ 방어)으로
-       policy를 각 벤치마크와 비교해 콘솔에 요약 출력한다.
+    4) 하이브리드 판정(이슈 #46 확정)으로 policy를 각 벤치마크와 비교해 콘솔에 요약 출력한다:
+       (샤프 15%+ 개선 또는 MDD 20%+ 방어 — 벤치마크마다 따로) AND (비중편차·회전율이 정상성
+       기준을 만족 — 모든 벤치마크 비교에 공통).
 
-이슈 #46(비중편차·회전율 판정 기준)은 아직 팀 미확정이라 넣지 않았다. `strategies`/`comparison`
-값은 `summarize()`가 반환하는 순수 dict를 그대로 담아 옮기기만 하므로, 나중에 `summarize()`
-쪽에 키(예: 비중편차)만 추가하면 이 모듈은 코드를 손대지 않아도 그 값을 그대로 저장·출력한다.
+`strategies`/`comparison` 값은 `summarize()`가 반환하는 순수 dict를 그대로 담아 옮기기만
+한다 — `summarize()` 쪽에 새 키가 추가돼도 이 모듈은 코드를 손대지 않아도 그 값을 그대로
+저장·출력한다.
 
 실행:
     python -m src.backtest.runner                 # test split, config.split 전체 fold 순회
@@ -33,6 +34,11 @@ from src.config_loader import DEFAULT_CONFIG_PATH, get_assets, get_inference, lo
 SHARPE_IMPROVEMENT_TARGET = 0.15
 MDD_DEFENSE_TARGET = 0.20
 
+# 이슈 #46(팀 확정) — 정상성(sanity) 기준. policy 자체의 절대적 속성이라 벤치마크와 무관하게
+# 한 번만 계산하고, 모든 벤치마크 비교에 공통으로 AND 결합한다.
+WEIGHT_DEVIATION_TARGET = 0.05
+TURNOVER_TARGET = 0.3
+
 # run_id에 쓰는 전략별 짧은 키(팀 확정: fold{N}_{key}).
 _STRATEGY_KEYS = {"RL policy": "policy", "1/N": "1n", "60:40": "60_40", "B&H": "bh"}
 
@@ -47,12 +53,21 @@ def _run_id(fold_id: int, strategy_key: str) -> str:
 
 
 def _compare_to_benchmarks(strategies: dict[str, dict]) -> dict[str, dict]:
-    """policy가 각 벤치마크 대비 CLAUDE.md §1 기준(샤프 15%+ 개선 또는 MDD 20%+ 방어)을 만족하는가.
+    """policy가 각 벤치마크 대비 하이브리드 기준(이슈 #46, 팀 확정)을 만족하는가.
 
-    `strategies`의 각 값은 `summarize()` dict를 그대로 받는다 — 나중에 이슈 #46 지표(비중편차·
-    회전율)가 그 dict에 추가돼도 이 함수는 sharpe/mdd 키만 보므로 그대로 동작한다.
+    두 축을 AND로 결합한다:
+      ① 성과 — 벤치마크마다 따로 계산: 샤프 15%+ 개선 또는 MDD 20%+ 방어(CLAUDE.md §1).
+      ② 정상성 — policy 자체의 절대적 속성이라 비교 대상 벤치마크와 무관하므로 한 번만
+         계산해 모든 벤치마크 비교에 공통 적용: 비중편차(Active Share)가
+         `WEIGHT_DEVIATION_TARGET` 이상(60:40을 그대로 베낀 "패시브 흉내"가 아님을 증명)
+         AND 회전율이 `TURNOVER_TARGET` 이하(과매매 방지).
+
+    `strategies`의 각 값은 `summarize()` dict를 그대로 받는다.
     """
     policy = strategies["RL policy"]
+    weight_deviation_ok = policy["weight_deviation"] >= WEIGHT_DEVIATION_TARGET
+    turnover_ok = policy["avg_turnover"] <= TURNOVER_TARGET
+
     out: dict[str, dict] = {}
     for name, m in strategies.items():
         if name == "RL policy":
@@ -64,13 +79,16 @@ def _compare_to_benchmarks(strategies: dict[str, dict]) -> dict[str, dict]:
         mdd_defense = (
             (abs(m["mdd"]) - abs(policy["mdd"])) / abs(m["mdd"]) if m["mdd"] != 0 else float("nan")
         )
+        performance_ok = (
+            (not np.isnan(sharpe_improvement) and sharpe_improvement >= SHARPE_IMPROVEMENT_TARGET)
+            or (not np.isnan(mdd_defense) and mdd_defense >= MDD_DEFENSE_TARGET)
+        )
         out[name] = {
             "sharpe_improvement_pct": sharpe_improvement,
             "mdd_defense_pct": mdd_defense,
-            "beats_target": bool(
-                (not np.isnan(sharpe_improvement) and sharpe_improvement >= SHARPE_IMPROVEMENT_TARGET)
-                or (not np.isnan(mdd_defense) and mdd_defense >= MDD_DEFENSE_TARGET)
-            ),
+            "weight_deviation_ok": weight_deviation_ok,
+            "turnover_ok": turnover_ok,
+            "beats_target": bool(performance_ok and weight_deviation_ok and turnover_ok),
         }
     return out
 
@@ -140,12 +158,14 @@ def _print_fold_report(result: dict) -> None:
     fold_id = result["fold_id"]
     start, end = result["period"]
     print(f"\n=== fold{fold_id} test: {start} ~ {end} ===")
-    print(f"{'전략':<10}{'총수익':>10}{'샤프':>9}{'MDD':>10}{'회전율':>10}{'누적비용':>14}")
-    print("-" * 63)
+    print(
+        f"{'전략':<10}{'총수익':>10}{'샤프':>9}{'MDD':>10}{'회전율':>10}{'비중편차':>10}{'누적비용':>14}"
+    )
+    print("-" * 73)
     for name, m in result["strategies"].items():
         print(
             f"{name:<10}{m['total_return']:>9.2%}{m['sharpe']:>9.3f}{m['mdd']:>9.2%}"
-            f"{m['avg_turnover']:>10.4f}{m['total_cost']:>14,.0f}"
+            f"{m['avg_turnover']:>10.4f}{m['weight_deviation']:>10.4f}{m['total_cost']:>14,.0f}"
         )
 
     print(f"\n{'vs 벤치마크':<10}{'샤프개선':>12}{'MDD방어':>12}{'CLAUDE §1':>12}")

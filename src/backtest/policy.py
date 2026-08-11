@@ -30,6 +30,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from src.backtest.benchmark import sixty_forty_target
 from src.backtest.engine import BacktestEngine
 from src.config_loader import DEFAULT_CONFIG_PATH, get_assets, get_window, load_config
 from src.data import schema
@@ -160,16 +161,31 @@ def run_policy_on_fold(
 
 
 def summarize(nav_df: pd.DataFrame, initial_nav: float) -> dict:
-    """NAV 곡선에서 비교용 요약지표를 뽑는다(총수익·샤프·MDD·회전율·누적비용)."""
+    """NAV 곡선에서 비교용 요약지표를 뽑는다(총수익·샤프·MDD·회전율·누적비용·비중편차).
+
+    비중편차(weight_deviation, 이슈 #46)는 60:40 벤치마크 대비 Active Share를 매일 계산해
+    기간 평균한 것이다:
+
+        weight_deviation = mean_over_days( 0.5 * Σ|policy_weight_i - benchmark_weight_i| )
+
+    자산 컬럼은 `nav_df.columns`에서 `nav`/`cost`/`turnover`를 제외한 나머지로 추출한다
+    (하드코딩 금지 — policy든 벤치마크든 이 함수 하나로 계산 가능하게).
+    """
     nav = nav_df["nav"]
     r = nav.pct_change().dropna()
     std = float(r.std())
+
+    assets = [c for c in nav_df.columns if c not in ("nav", "cost", "turnover")]
+    benchmark_weights = sixty_forty_target(assets)
+    daily_deviation = 0.5 * (nav_df[assets] - benchmark_weights).abs().sum(axis=1)
+
     return {
         "total_return": float(nav.iloc[-1] / initial_nav - 1),
         "sharpe": float(r.mean() / std * np.sqrt(252)) if std > 0 else 0.0,
         "mdd": float((nav / nav.cummax() - 1).min()),
         "avg_turnover": float(nav_df["turnover"].mean()),
         "total_cost": float(nav_df["cost"].sum()),
+        "weight_deviation": float(daily_deviation.mean()),
     }
 
 

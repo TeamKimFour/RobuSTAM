@@ -26,7 +26,8 @@
         "comparison": [{"fold_id", "vs_benchmark": {...}}, ...]               # runner._compare_to_benchmarks 원본
         "verdict_summary": {                                                 # 벤치마크별 fold 통과 집계
             "1/N": {"folds_passed": int, "folds_total": int, "pass_rate": float}, ...
-        }   # 이슈 #46 판정 기준 미확정 — 숫자만 내고 합격/불합격 이분법은 넣지 않음.
+        }   # beats_target(이슈 #46 팀 확정 기준)을 fold 개수·비율로 집계 — 숫자만 내고
+            # 합격/불합격 이분법(overall_pass 등)은 여전히 넣지 않음(판정은 사람이 본다).
             # loader.ts는 아직 이 키를 안 읽음(옵셔널 필드라 추가해도 FE는 그대로 동작).
     }
 
@@ -118,9 +119,10 @@ def _summarize_verdict(fold_results: list[dict[str, Any]]) -> dict[str, dict[str
     """벤치마크별 fold 통과 현황을 집계한다.
 
     `fold_results`는 `run_fold()` 반환 dict들의 리스트 — 각 `comparison`은
-    `{"1/N": {..., "beats_target": bool}, "60:40": {...}, "B&H": {...}}` (CLAUDE.md §1 판정).
-    이슈 #46(비중편차·회전율 등 판정 기준)이 팀 미확정이라, "overall_pass" 같은 이분법
-    합격/불합격 필드는 넣지 않고 fold 통과 개수·비율 숫자만 낸다 — 판정은 사람이 한다.
+    `{"1/N": {..., "beats_target": bool}, "60:40": {...}, "B&H": {...}}`이며, `beats_target`는
+    이제 성과(샤프/MDD)와 정상성(비중편차·회전율, 이슈 #46 팀 확정)을 모두 반영한 완전한
+    판정이다(`runner._compare_to_benchmarks`). 이 함수는 그 판정을 fold 통과 개수·비율로
+    집계만 한다.
     """
     benchmarks = [name for name in STRATEGY_ORDER if name != "RL policy"]
     total = len(fold_results)
