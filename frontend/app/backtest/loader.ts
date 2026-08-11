@@ -16,9 +16,11 @@ import {
   BACKTEST_METRICS,
   BACKTEST_SERIES,
   BENCHMARK_TABLE,
+  COMBOS_MOCK,
   FOLD_TABLE,
   type BacktestMetrics,
   type BenchmarkRow,
+  type ComboSnapshot,
   type FoldRow,
   type Series,
 } from "./mock";
@@ -46,6 +48,33 @@ type ExportStrategy = {
   };
 };
 
+type ExportComboFoldRow = {
+  fold_id: number;
+  period: string;
+  sharpe: number;
+  cagr: number;
+  mdd: number;
+  avg_turnover: number;
+  total_cost: number;
+};
+
+type ExportCombo = {
+  combo: string;
+  display_name: string;
+  color: string;
+  nav: { date: string; value: number }[];
+  metrics: {
+    cagr: number;
+    sharpe: number;
+    mdd: number;
+    vol: number;
+    total_return: number;
+    avg_turnover: number;
+    total_cost: number;
+  };
+  fold_table: ExportComboFoldRow[];
+};
+
 type ExportBundle = {
   generated_at: string;
   initial_nav: number;
@@ -53,6 +82,7 @@ type ExportBundle = {
   strategies: ExportStrategy[];
   fold_table: { fold_id: number; period: string; sharpe: number; cagr: number; mdd: number }[];
   comparison?: unknown;
+  combos?: ExportCombo[];
 };
 
 export type BacktestSnapshot = {
@@ -62,6 +92,12 @@ export type BacktestSnapshot = {
   metrics: BacktestMetrics;
   benchmarkTable: BenchmarkRow[];
   foldTable: FoldRow[];
+  /**
+   * 콤보별(full·M0·M1·M2·M3) RL policy 성과. 실데이터는 도현이 M0~M3 policy를
+   * 학습해 `python -m src.backtest.export --combo full=... --combo M0=...`로 낼 때
+   * 채워진다. 미탑재(구 export 산출물)면 mock으로 채운다 — mock도 항상 5종을 낸다.
+   */
+  combos: ComboSnapshot[];
 };
 
 const EXPORT_RELATIVE_PATH = "public/backtest.json";
@@ -117,6 +153,26 @@ function metricsFromPolicy(strategies: ExportStrategy[]): BacktestMetrics {
   };
 }
 
+function toCombos(combos: ExportCombo[] | undefined): ComboSnapshot[] {
+  if (!combos || combos.length === 0) return COMBOS_MOCK;
+  return combos.map((c) => ({
+    combo: c.combo,
+    displayName: c.display_name,
+    color: c.color,
+    points: c.nav.map((p) => ({ date: p.date, value: p.value })),
+    metrics: c.metrics,
+    foldTable: c.fold_table.map((r) => ({
+      fold: `Fold ${r.fold_id}`,
+      period: r.period,
+      sharpe: r.sharpe,
+      cagr: r.cagr,
+      mdd: r.mdd,
+      avgTurnover: r.avg_turnover,
+      totalCost: r.total_cost,
+    })),
+  }));
+}
+
 /** 실데이터 우선 로더. 없으면 mock으로 fallback한다. */
 export async function loadBacktestSnapshot(): Promise<BacktestSnapshot> {
   const bundle = await readExport();
@@ -128,6 +184,7 @@ export async function loadBacktestSnapshot(): Promise<BacktestSnapshot> {
       metrics: BACKTEST_METRICS,
       benchmarkTable: BENCHMARK_TABLE,
       foldTable: FOLD_TABLE,
+      combos: COMBOS_MOCK,
     };
   }
   return {
@@ -137,5 +194,6 @@ export async function loadBacktestSnapshot(): Promise<BacktestSnapshot> {
     metrics: metricsFromPolicy(bundle.strategies),
     benchmarkTable: toBenchmarkTable(bundle.strategies),
     foldTable: toFoldTable(bundle.fold_table),
+    combos: toCombos(bundle.combos),
   };
 }
