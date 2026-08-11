@@ -277,6 +277,77 @@ def test_upload_puts_object_at_frontend_key(tmp_path, monkeypatch, _cfg_with_buc
         assert obj["ContentType"] == "application/json"
 
 
+# ── ⑦ combos 필드: 콤보별 policy 병행 익스포트 (도현·찬휘 3순위) ──
+def test_build_export_omits_combos_when_no_models_by_combo(cfg_path):
+    """models_by_combo가 없으면 combos 필드가 아예 없어야 한다 (하위호환)."""
+    bundle = ex.build_export(
+        model=None, config_path=cfg_path, initial_nav=1_000_000,
+        run_fold_fn=_fake_run_fold_factory(1_000_000),
+    )
+    assert "combos" not in bundle
+
+
+def test_build_export_populates_combos_when_models_provided(cfg_path):
+    """models_by_combo가 있으면 각 콤보의 nav·metrics·fold_table을 조립한다."""
+    fake = _fake_run_fold_factory(1_000_000)
+    # 실제 모델 객체는 필요 없다 — fake run_fold는 model 인자를 무시한다.
+    models = {"full": object(), "M0": object(), "M1": object()}
+    bundle = ex.build_export(
+        model=None, config_path=cfg_path, initial_nav=1_000_000,
+        run_fold_fn=fake, models_by_combo=models,
+    )
+    assert "combos" in bundle
+    # COMBO_ORDER 순서 유지 (full → M0 → M1 → M2 → M3)
+    assert [c["combo"] for c in bundle["combos"]] == ["full", "M0", "M1"]
+    for c in bundle["combos"]:
+        assert c["display_name"].startswith(c["combo"].capitalize()[0].upper()) or c["display_name"].startswith(c["combo"][0])
+        assert c["color"].startswith("#")
+        assert c["nav"], "nav 시계열이 비어 있음"
+        assert c["nav"][0]["value"] == pytest.approx(1.0)  # 정규화 시작값
+        # 전 구간 지표
+        for k in ("cagr", "sharpe", "mdd", "vol", "total_return", "avg_turnover", "total_cost"):
+            assert k in c["metrics"], f"combo {c['combo']}에 metrics.{k} 누락"
+        # fold별 상세
+        assert len(c["fold_table"]) == 3
+        for row in c["fold_table"]:
+            assert set(row.keys()) == {
+                "fold_id", "period", "sharpe", "cagr", "mdd", "avg_turnover", "total_cost",
+            }
+
+
+def test_build_export_ignores_unknown_combos_in_models_dict(cfg_path):
+    """models_by_combo에 알 수 없는 콤보명이 섞여 있으면 COMBO_ORDER의 것만 뽑아낸다."""
+    fake = _fake_run_fold_factory(1_000_000)
+    models = {"full": object(), "GARBAGE": object()}
+    bundle = ex.build_export(
+        model=None, config_path=cfg_path, initial_nav=1_000_000,
+        run_fold_fn=fake, models_by_combo=models,
+    )
+    assert [c["combo"] for c in bundle["combos"]] == ["full"]
+
+
+def test_parse_combo_arg_rejects_bad_format():
+    """`name=path` 형식이 아니면 SystemExit."""
+    with pytest.raises(SystemExit, match="name=path"):
+        ex._parse_combo_arg(["fullruns/full.zip"])
+
+
+def test_parse_combo_arg_rejects_unknown_combo():
+    """오타로 조용히 스킵되면 산출물이 어긋나므로 명시적으로 거부한다."""
+    with pytest.raises(SystemExit, match="알 수 없는 콤보"):
+        ex._parse_combo_arg(["M4=runs/m4.zip"])
+
+
+def test_parse_combo_arg_returns_empty_for_none():
+    assert ex._parse_combo_arg(None) == {}
+    assert ex._parse_combo_arg([]) == {}
+
+
+def test_parse_combo_arg_handles_multiple_pairs():
+    out = ex._parse_combo_arg(["full=a.zip", "M0=b.zip", " M3 = c.zip "])
+    assert out == {"full": "a.zip", "M0": "b.zip", "M3": "c.zip"}
+
+
 def test_upload_env_bucket_overrides_config(tmp_path, monkeypatch, _cfg_with_bucket):
     """S3_BUCKET 환경변수가 config의 버킷을 override한다(s3_sync와 같은 관례)."""
     moto = pytest.importorskip("moto")

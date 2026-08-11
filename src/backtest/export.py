@@ -28,11 +28,30 @@
             "1/N": {"folds_passed": int, "folds_total": int, "pass_rate": float}, ...
         }   # 이슈 #46 판정 기준 미확정 — 숫자만 내고 합격/불합격 이분법은 넣지 않음.
             # loader.ts는 아직 이 키를 안 읽음(옵셔널 필드라 추가해도 FE는 그대로 동작).
-    }
+        "combos": [                                                          # NEW · 옵셔널
+            {
+                "combo": "full" | "M0" | "M1" | "M2" | "M3",
+                "display_name": "Full (D=187)" | ...,   # FE 표시명
+                "color": "#hex",                        # 콤보 오버레이 색
+                "nav": [{"date", "value"}, ...],        # fold 이어붙인 정규화 곡선
+                "metrics": {                             # 전 구간 종합지표
+                    "cagr", "sharpe", "mdd", "vol", "total_return",
+                    "avg_turnover", "total_cost"
+                },
+                "fold_table": [                          # 콤보별 fold 상세 (도현·찬휘 3순위)
+                    {"fold_id", "period", "sharpe", "cagr", "mdd",
+                     "avg_turnover", "total_cost"}, ...
+                ]
+            }, ...
+        ]   # 도현이 M0~M3 + full 각 policy를 학습해 넘길 때 populated. 없으면 FE는
+            # 콤보 비교 섹션을 조용히 스킵한다(하위호환 — 기존 단일 policy 배포 유지).
 
 실행:
     python -m src.backtest.export
     python -m src.backtest.export --out path/file.json --model-path runs/best.zip
+    # 콤보 다중 policy (도현 M0~M3 학습 산출물 병합):
+    python -m src.backtest.export --combo full=runs/full.zip --combo M0=runs/m0.zip \\
+        --combo M1=runs/m1.zip --combo M2=runs/m2.zip --combo M3=runs/m3.zip
 """
 
 from __future__ import annotations
@@ -56,6 +75,24 @@ STRATEGY_COLOR: dict[str, str] = {
     "60:40": "#10b981",
     "1/N": "#a5b4fc",
     "B&H": "#dc2626",
+}
+
+# 콤보 카탈로그 — docs/state_spec.md §2 v1.2. FE ComboComparisonTable·오버레이 차트가
+# 이 순서/색을 그대로 소비한다(mock.ts와 일치해야 시각적 일관성 유지).
+COMBO_ORDER: tuple[str, ...] = ("full", "M0", "M1", "M2", "M3")
+COMBO_COLOR: dict[str, str] = {
+    "full": "#8b5cf6",  # RL policy와 같은 보라 (기본 정책 = full 콤보)
+    "M0": "#f59e0b",    # 앰버 — EBR 단독, 지표 최소
+    "M1": "#22d3ee",    # 시안
+    "M2": "#10b981",    # 에메랄드
+    "M3": "#f472b6",    # 핑크 — 지표 최대(Drawdown 포함)
+}
+COMBO_DISPLAY: dict[str, str] = {
+    "full": "Full (D=187, 6+2)",
+    "M0": "M0 (D=156, 0+1)",
+    "M1": "M1 (D=166, 2+1)",
+    "M2": "M2 (D=171, 3+1)",
+    "M3": "M3 (D=172, 3+2)",
 }
 
 DEFAULT_OUT_PATH = "frontend/public/backtest.json"
@@ -137,16 +174,79 @@ def _summarize_verdict(fold_results: list[dict[str, Any]]) -> dict[str, dict[str
     return summary
 
 
+def _build_combo_snapshot(
+    combo: str,
+    model,
+    config_path: str,
+    initial_nav: float,
+    run_fold_fn,
+) -> dict[str, Any]:
+    """단일 콤보(=policy 하나)에 대해 fold 전체를 돌려 combo 항목을 조립한다.
+
+    반환 스키마는 계약 §"combos" 항목과 일치. RL policy 성과만 남기고(콤보 비교의 관심사),
+    벤치마크는 상위 `strategies`가 이미 담고 있어 중복 저장하지 않는다.
+    """
+    cfg = load_config(config_path)
+    fold_ids = _fold_ids(cfg)
+
+    per_fold_points: list[list[dict[str, Any]]] = []
+    per_fold_metrics: list[dict[str, Any]] = []
+    per_fold_period: list[tuple[str, str]] = []
+    for fold_id in fold_ids:
+        result = run_fold_fn(fold_id, model, config_path, "test", initial_nav=initial_nav)
+        rl_nav_df = result["nav_by_strategy"]["RL policy"]
+        per_fold_points.append(_nav_to_points(rl_nav_df, initial_nav))
+        per_fold_metrics.append(result["strategies"]["RL policy"])
+        per_fold_period.append(result["period"])
+
+    concat_pts = _concat_folds(per_fold_points)
+    overall = _metrics_from_points(concat_pts)
+    overall["avg_turnover"] = (
+        float(np.mean([m["avg_turnover"] for m in per_fold_metrics])) if per_fold_metrics else 0.0
+    )
+    overall["total_cost"] = (
+        float(np.sum([m["total_cost"] for m in per_fold_metrics])) if per_fold_metrics else 0.0
+    )
+
+    fold_table = []
+    for i, fold_id in enumerate(fold_ids):
+        fm = _metrics_from_points(per_fold_points[i])
+        start, end = per_fold_period[i]
+        fold_table.append({
+            "fold_id": fold_id,
+            "period": f"{start} ~ {end}",
+            "sharpe": fm["sharpe"],
+            "cagr": fm["cagr"],
+            "mdd": fm["mdd"],
+            "avg_turnover": float(per_fold_metrics[i]["avg_turnover"]),
+            "total_cost": float(per_fold_metrics[i]["total_cost"]),
+        })
+
+    return {
+        "combo": combo,
+        "display_name": COMBO_DISPLAY.get(combo, combo),
+        "color": COMBO_COLOR.get(combo, "#8b5cf6"),
+        "nav": concat_pts,
+        "metrics": overall,
+        "fold_table": fold_table,
+    }
+
+
 def build_export(
     model,
     config_path: str = DEFAULT_CONFIG_PATH,
     *,
     initial_nav: float = 1_000_000,
     run_fold_fn=run_fold,
+    models_by_combo: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """모든 fold에서 run_fold를 실행하고 FE JSON 계약으로 조립한다.
 
     `run_fold_fn`은 테스트가 모델·Feature Store 없이 가짜 결과를 주입할 수 있도록 분리했다.
+
+    `models_by_combo`가 주어지면 각 콤보별로 별도 policy를 굴려 `combos` 항목을
+    함께 조립한다(도현이 M0~M3 + full 각 policy를 학습해 넘길 때). None(기본)이면
+    `combos` 필드는 빠지고 기존 단일 policy 계약만 나간다(하위호환).
     """
     cfg = load_config(config_path)
     fold_ids = _fold_ids(cfg)
@@ -197,7 +297,7 @@ def build_export(
         for i, r in enumerate(fold_results)
     ]
 
-    return {
+    bundle: dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "initial_nav": float(initial_nav),
         "periods": periods,
@@ -208,6 +308,18 @@ def build_export(
         ],
         "verdict_summary": _summarize_verdict(fold_results),
     }
+
+    if models_by_combo:
+        # COMBO_ORDER 순서 유지 — FE 표 정렬이 이 순서를 기대한다.
+        # 사전에 없는 콤보는 넣지 않는다. 사전에 있는데 모델이 없으면 그 콤보만 스킵.
+        combos_out = [
+            _build_combo_snapshot(name, models_by_combo[name], config_path, initial_nav, run_fold_fn)
+            for name in COMBO_ORDER
+            if name in models_by_combo
+        ]
+        if combos_out:
+            bundle["combos"] = combos_out
+    return bundle
 
 
 def write_export(bundle: dict[str, Any], out_path: str = DEFAULT_OUT_PATH) -> None:
@@ -273,12 +385,44 @@ def upload_to_s3(
     return url
 
 
+def _parse_combo_arg(pairs: list[str] | None) -> dict[str, str]:
+    """`--combo full=path.zip --combo M0=path.zip` → {"full": "path.zip", "M0": "path.zip"}.
+
+    잘못된 콤보명은 SystemExit로 명시적으로 거부한다 (오타로 조용히 스킵되면 산출물이 어긋남).
+    """
+    if not pairs:
+        return {}
+    out: dict[str, str] = {}
+    for pair in pairs:
+        if "=" not in pair:
+            raise SystemExit(f"--combo는 name=path 형식이어야 합니다: {pair!r}")
+        name, path = pair.split("=", 1)
+        name = name.strip()
+        path = path.strip()
+        if name not in COMBO_ORDER:
+            raise SystemExit(
+                f"알 수 없는 콤보명: {name!r} (허용: {list(COMBO_ORDER)})"
+            )
+        out[name] = path
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="FE 대시보드용 백테스트 결과 JSON 익스포터")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--out", default=DEFAULT_OUT_PATH)
     parser.add_argument("--model-path", default=None, help="기본값은 config.inference.model_path")
     parser.add_argument("--initial-nav", type=float, default=1_000_000)
+    parser.add_argument(
+        "--combo",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help=(
+            "콤보명=policy.zip 경로. 반복 지정 시 여러 콤보(NAV·metrics)를 함께 익스포트한다. "
+            "예: --combo full=runs/full.zip --combo M0=runs/m0.zip"
+        ),
+    )
     parser.add_argument(
         "--upload-s3",
         action="store_true",
@@ -294,10 +438,21 @@ def main() -> None:
         raise SystemExit("model_path가 없습니다 — --model-path 또는 config.inference.model_path")
     model = PPO.load(model_path)
 
-    bundle = build_export(model, args.config, initial_nav=args.initial_nav)
+    combo_paths = _parse_combo_arg(args.combo)
+    models_by_combo = {name: PPO.load(p) for name, p in combo_paths.items()} or None
+
+    bundle = build_export(
+        model,
+        args.config,
+        initial_nav=args.initial_nav,
+        models_by_combo=models_by_combo,
+    )
     write_export(bundle, args.out)
     print(f"백테스트 export 완료 → {args.out}")
     print(f"  fold {len(bundle['periods'])}개 · 전략 {len(bundle['strategies'])}개 저장")
+    if "combos" in bundle:
+        print(f"  콤보 {len(bundle['combos'])}종 병행 저장: "
+              f"{[c['combo'] for c in bundle['combos']]}")
 
     if args.upload_s3:
         url = upload_to_s3(args.out, args.config)
