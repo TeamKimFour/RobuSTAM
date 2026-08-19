@@ -1,7 +1,7 @@
 """피처 콤보 실험 러너 검증 — 이슈 #34 Phase 2 (도현).
 
 두 층으로 나눠 본다.
-  ① 판정 로직: `judge_combo`·`weight_dispersion`·`fold_metrics_from_run`은 순수 함수라
+  ① 판정 로직: `judge_combo`·`weight_dispersion_experiment`·`fold_metrics_from_run`은 순수 함수라
      학습 없이 검증한다. 관문(비중편차·회전율) → 성과(vs 1/N 샤프) 2단계 판정과 기준값
      override가 계약대로 도는지 박제한다.
   ② 오케스트레이션: `run_experiment`가 콤보별 학습→백테스트→판정을 실제로 이어 붙이는지,
@@ -23,13 +23,13 @@ from src.models.experiment import (
     FoldMetrics,
     fold_metrics_from_run,
     judge_combo,
-    weight_dispersion,
+    weight_dispersion_experiment,
 )
 
 ASSETS = ["SPY", "EWY", "TLT", "GLD", "SHV"]
 
 
-# ── weight_dispersion ─────────────────────────────────────────────────
+# ── weight_dispersion_experiment ──────────────────────────────────────
 
 def _policy_nav(mean_weights: dict[str, float], n: int = 10) -> pd.DataFrame:
     """자산별 (상수) 평균비중을 갖는 policy NAV DataFrame 스텁."""
@@ -39,20 +39,20 @@ def _policy_nav(mean_weights: dict[str, float], n: int = 10) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
-def test_weight_dispersion_is_max_minus_min_of_asset_means():
+def test_weight_dispersion_experiment_is_max_minus_min_of_asset_means():
     df = _policy_nav({"SPY": 0.30, "EWY": 0.20, "TLT": 0.20, "GLD": 0.15, "SHV": 0.15})
-    assert weight_dispersion(df, ASSETS) == pytest.approx(0.30 - 0.15, abs=1e-12)
+    assert weight_dispersion_experiment(df, ASSETS) == pytest.approx(0.30 - 0.15, abs=1e-12)
 
 
-def test_weight_dispersion_zero_for_equal_weight():
+def test_weight_dispersion_experiment_zero_for_equal_weight():
     df = _policy_nav({a: 0.2 for a in ASSETS})  # 1/N 흉내
-    assert weight_dispersion(df, ASSETS) == pytest.approx(0.0, abs=1e-12)
+    assert weight_dispersion_experiment(df, ASSETS) == pytest.approx(0.0, abs=1e-12)
 
 
-def test_weight_dispersion_missing_column_raises():
+def test_weight_dispersion_experiment_missing_column_raises():
     df = _policy_nav({a: 0.2 for a in ASSETS}).drop(columns=["SHV"])
     with pytest.raises(ValueError, match="비중 컬럼"):
-        weight_dispersion(df, ASSETS)
+        weight_dispersion_experiment(df, ASSETS)
 
 
 # ── judge_combo: 관문(gate) ────────────────────────────────────────────
@@ -151,7 +151,7 @@ def test_fold_metrics_from_run_extracts_normalized_fields():
     assert fm.avg_turnover == pytest.approx(0.27)
     assert fm.beats_1n is False
     assert fm.sharpe_gap_vs_1n == pytest.approx(0.80 - 0.90, abs=1e-12)
-    assert fm.weight_dispersion == pytest.approx(0.28 - 0.15, abs=1e-12)
+    assert fm.weight_dispersion_experiment == pytest.approx(0.28 - 0.15, abs=1e-12)
 
 
 # ── run_experiment 오케스트레이션 (end-to-end) ─────────────────────────
@@ -318,7 +318,7 @@ def test_run_experiment_logs_test_metrics_to_mlflow(tmp_path):
         "test_sharpe",
         "test_mdd",
         "test_avg_turnover",
-        "test_weight_dispersion",
+        "test_weight_dispersion_experiment",
         "test_total_cost",
         "test_sharpe_gap_vs_1n",
         "test_bench_1n_sharpe",
@@ -334,8 +334,8 @@ def test_run_experiment_logs_test_metrics_to_mlflow(tmp_path):
     # JSON과 MLflow의 값이 일치해야 한다(두 기록이 갈라지면 비교가 깨진다).
     verdict = results["combos"]["M1"]["verdict"]
     assert run.data.metrics["verdict_adopted"] == float(verdict["adopted"])
-    assert run.data.metrics["test_weight_dispersion"] == pytest.approx(
-        verdict["per_fold"][0]["weight_dispersion"]
+    assert run.data.metrics["test_weight_dispersion_experiment"] == pytest.approx(
+        verdict["per_fold"][0]["weight_dispersion_experiment"]
     )
     assert run.data.tags["verdict"] in ("ADOPTED", "REJECTED")
 

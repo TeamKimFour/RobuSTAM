@@ -305,7 +305,7 @@ DQN MVP는 파이프라인 결선용이며, 성능 검증은 5주차 PPO(연속 
 | 구분 | 키 |
 |---|---|
 | 성과 | `test_sharpe` · `test_total_return` · `test_mdd` · `test_avg_turnover` · `test_total_cost` |
-| 3지표 | `test_weight_dispersion` · `test_avg_turnover` · `test_sharpe` |
+| 3지표 | `test_weight_dispersion_experiment` · `test_avg_turnover` · `test_sharpe` |
 | 대비 | `test_sharpe_gap_vs_1n` · `test_beats_1n` · `test_bench_{1n,60_40,bh}_{sharpe,mdd}` |
 | 판정 | `verdict_adopted` · `verdict_gate_passed` · `verdict_performance_passed` (metric) + `verdict`·`verdict_reasons` (tag) |
 
@@ -366,3 +366,4 @@ Feature Store를 읽는다.
 | v0.6 | 2026-08-09 | §8-3 신설: 피처 콤보(M0~M3)를 학습·백테스트까지 배선(PR #69가 남긴 "후속 작업: 도현"). `config_loader.resolve_paths_for_combo`로 features와 Feature Store 경로를 한 번에 전환, `train.py`/`runner.py`에 `--combo` 추가, `policy.run_policy`의 기대 컬럼·prev_weight 슬라이스를 콤보 차원으로 수정. `experiment.py`를 콤보 이름(M0~M3) 기반으로 재작성하고 `ExperimentSettings`로 fold·seed·학습량·λ·κ 동일 조건을 강제. MLflow에 `feature_set`·`state_dim` provenance 기록. `tests/test_combo_wiring.py` 8건 추가. |
 | v0.7 | 2026-08-09 | §8-2에 "test 지표 되붙이기" 추가: 백테스트 후 `MlflowClient`로 학습 run에 `test_sharpe`·`test_mdd`·`test_avg_turnover`·`test_weight_dispersion`·벤치마크 대비·판정 결과를 추가 기록(`log_backtest_to_run`·`log_verdict_to_runs`). 기존엔 valid 지표만 MLflow에 남고 test 쪽은 결과 JSON에만 있어, 형우 시각화·팀 비교가 로컬 파일에 의존했다. |
 | v0.5 | 2026-07-30 | §8 추가: 피처 조합 실험 러너(`src/models/experiment.py`) — 안 C 3조합 학습→백테스트→3지표 자동 판정. `judge_combo`(관문:비중편차·회전율 / 성과:vs1/N 샤프) 순수함수 + `Criteria`로 기준 분리(기본=도현 회의 초안). `tests/test_experiment.py` 13건. 실학습은 민지 재빌드 Feature Store 대기. 기존 §8→§9. |
+| v0.8 | 2026-08-19 | PR #74 리뷰(alswl722) 반영: `experiment.py`의 `weight_dispersion`(policy 자산별 평균비중 max−min)이 `src/backtest/runner.py`의 `weight_deviation`(60:40 벤치마크 대비 Active Share, 별개 지표)과 이름이 헷갈린다는 지적에 따라 `weight_dispersion_experiment`로 이름만 정리(계산 로직·기준값·판정 결과는 변경 없음). MLflow 키 `test_weight_dispersion`도 `test_weight_dispersion_experiment`로 동일하게 변경. |

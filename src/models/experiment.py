@@ -15,8 +15,11 @@
 
 판정 구조 (관문 → 성과, AND)
     관문(Gate): 세 지표가 상충하므로 먼저 통과해야 성과 판정 대상이 된다.
-        - 비중편차 평균 ≥ min_dispersion_mean, 그리고 어느 fold도 ≥ min_dispersion_any_fold
-          (1/N 복제 배제 — 편차가 낮으면 샤프가 좋아도 알파가 아니라 균등비중 흉내다)
+        - 비중편차(weight_dispersion_experiment) 평균 ≥ min_dispersion_mean, 그리고 어느
+          fold도 ≥ min_dispersion_any_fold (1/N 복제 배제 — 편차가 낮으면 샤프가 좋아도
+          알파가 아니라 균등비중 흉내다). 이 지표는 policy 자산별 **평균비중의 max-min**이며,
+          `runner.py`의 `weight_deviation`(60:40 벤치마크 대비 Active Share)과는 계산 방식이
+          다른 별개 지표다 — 이름이 비슷해 혼동하기 쉬우니 주의(PR #74 리뷰 반영).
         - 회전율 평균 ≤ max_turnover_mean (과매매 배제)
     성과(Performance): 관문 통과분만 판정. 주 기준은 vs 1/N(가장 높은 벤치마크).
         - 3 fold 중 min_folds_beating_1n개 이상에서 CLAUDE.md §1(샤프 +15% 또는 MDD 20% 방어) 달성
@@ -66,18 +69,23 @@ class FoldMetrics:
     """judge_combo가 소비하는 fold별 정규화 지표 (run_fold 결과에서 추출)."""
 
     fold_id: int
-    weight_dispersion: float   # policy 자산별 평균비중의 max−min
+    weight_dispersion_experiment: float   # policy 자산별 평균비중의 max−min
     avg_turnover: float        # policy 일평균 L1 회전율
     beats_1n: bool             # vs 1/N CLAUDE.md §1 달성 여부
     sharpe_gap_vs_1n: float    # policy 샤프 − 1/N 샤프 (절대 격차)
 
 
-def weight_dispersion(policy_nav_df, assets: list[str]) -> float:
+def weight_dispersion_experiment(policy_nav_df, assets: list[str]) -> float:
     """policy NAV DataFrame의 자산별 비중 컬럼에서 비중편차(자산별 평균비중의 max−min)를 낸다.
 
     `src.backtest.policy._run_policy`가 매 행에 자산별 목표비중을 컬럼으로 실어주므로
     (예: SPY·EWY·TLT·GLD·SHV), 각 자산 평균을 낸 뒤 최대−최소를 반환한다. 이 값이 0에
     가까우면 정책이 1/N(균등비중)을 흉내낸 것이다(issue34_proposal §2-2).
+
+    이 지표(weight_dispersion_experiment)는 policy 자산별 평균비중의 max-min이며,
+    `runner.py`의 `weight_deviation`(60:40 벤치마크 대비 Active Share)과는 다른 방식으로
+    계산되는 별개 지표다 — 이름이 비슷하다고 같은 값이 아니다(PR #74 리뷰 반영, 이름만
+    구분, 계산 로직은 변경 없음).
     """
     missing = [a for a in assets if a not in policy_nav_df.columns]
     if missing:
@@ -95,7 +103,9 @@ def fold_metrics_from_run(run_result: dict, assets: list[str]) -> FoldMetrics:
     one_over_n = run_result["strategies"]["1/N"]
     return FoldMetrics(
         fold_id=run_result["fold_id"],
-        weight_dispersion=weight_dispersion(run_result["nav_by_strategy"]["RL policy"], assets),
+        weight_dispersion_experiment=weight_dispersion_experiment(
+            run_result["nav_by_strategy"]["RL policy"], assets
+        ),
         avg_turnover=float(policy["avg_turnover"]),
         beats_1n=bool(run_result["comparison"]["1/N"]["beats_target"]),
         sharpe_gap_vs_1n=float(policy["sharpe"]) - float(one_over_n["sharpe"]),
@@ -111,7 +121,7 @@ def judge_combo(folds: list[FoldMetrics], criteria: Criteria | None = None) -> d
         raise ValueError("folds가 비어 있습니다 — 최소 1개 fold 결과가 필요합니다.")
     c = criteria or Criteria()
 
-    dispersions = [f.weight_dispersion for f in folds]
+    dispersions = [f.weight_dispersion_experiment for f in folds]
     turnovers = [f.avg_turnover for f in folds]
     dispersion_mean = mean(dispersions)
     turnover_mean = mean(turnovers)
@@ -232,7 +242,8 @@ def log_backtest_to_run(cfg: dict, mlflow_run_id: str, run_result: dict, fm: Fol
         "test_avg_turnover": float(policy["avg_turnover"]),
         "test_total_cost": float(policy["total_cost"]),
         # 3지표 중 비중편차는 summarize()에 없어 러너가 보완해 계산한 값이다.
-        "test_weight_dispersion": float(fm.weight_dispersion),
+        # (weight_dispersion_experiment — runner.py의 weight_deviation과는 별개 지표)
+        "test_weight_dispersion_experiment": float(fm.weight_dispersion_experiment),
         "test_sharpe_gap_vs_1n": float(fm.sharpe_gap_vs_1n),
         "test_beats_1n": float(fm.beats_1n),
     }
