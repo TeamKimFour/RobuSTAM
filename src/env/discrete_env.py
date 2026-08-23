@@ -39,6 +39,48 @@ from src.config_loader import get_assets
 from src.env.portfolio_env import PortfolioEnv
 
 
+_EPS = 1e-8
+
+
+def discrete_action_to_logits(
+    w_prev: np.ndarray,
+    discrete_action: int,
+    *,
+    shv_idx: int,
+    tradable_idx: list[int],
+    delta: float,
+) -> np.ndarray:
+    """이산 action(정수)을 직전 비중 기준으로 로짓 벡터로 바꾼다 (순수 함수).
+
+    학습(`DiscretePortfolioEnv.action`)과 백테스트(`src.backtest.policy.run_policy`)가
+    **같은 함수**를 쓰게 하려고 분리했다. 두 경로가 Δ 이전 규칙을 따로 구현하면 백테스트가
+    학습과 조용히 어긋난다 — policy.py 모듈 독스트링 ③이 경고하는 것과 같은 종류의 사고다.
+    """
+    n_tradable = len(tradable_idx)
+    hold_action = 2 * n_tradable
+    if not (0 <= discrete_action <= hold_action):
+        raise ValueError(
+            f"이산 action은 [0, {hold_action + 1}) 범위여야 합니다: {discrete_action}"
+        )
+
+    w_new = np.asarray(w_prev, dtype=np.float64).copy()
+    if discrete_action == hold_action:
+        pass
+    elif discrete_action < n_tradable:  # +Δ to tradable asset (SHV → asset)
+        asset_i = tradable_idx[discrete_action]
+        move = float(min(delta, w_new[shv_idx]))
+        w_new[asset_i] += move
+        w_new[shv_idx] -= move
+    else:  # -Δ from tradable asset (asset → SHV)
+        asset_i = tradable_idx[discrete_action - n_tradable]
+        move = float(min(delta, w_new[asset_i]))
+        w_new[asset_i] -= move
+        w_new[shv_idx] += move
+
+    # softmax(log(w)) = w (∑w=1) — 원본 env의 softmax 계약을 그대로 유지한다.
+    return np.log(np.clip(w_new, _EPS, 1.0)).astype(np.float32)
+
+
 class DiscretePortfolioEnv(gym.ActionWrapper):
     """PortfolioEnv를 DQN용 이산 행동으로 감싸는 어댑터.
 
@@ -72,29 +114,13 @@ class DiscretePortfolioEnv(gym.ActionWrapper):
         self.action_space = spaces.Discrete(2 * self._n_tradable + 1)
 
     def action(self, discrete_action) -> np.ndarray:
-        idx = int(discrete_action)
-        if not (0 <= idx < self.action_space.n):
-            raise ValueError(
-                f"이산 action은 [0, {self.action_space.n}) 범위여야 합니다: {idx}"
-            )
-
         # ActionWrapper.step()이 self.env.step()을 곧바로 호출하므로 이 시점의
         # _current_weight가 w_prev와 일치한다.
         w_prev = self.env.unwrapped._current_weight.copy()
-        w_new = w_prev.copy()
-
-        if idx == self._hold_action:
-            pass
-        elif idx < self._n_tradable:  # +Δ to tradable asset (SHV → asset)
-            asset_i = self._tradable_idx[idx]
-            move = float(min(self.delta, w_prev[self._shv_idx]))
-            w_new[asset_i] += move
-            w_new[self._shv_idx] -= move
-        else:  # -Δ from tradable asset (asset → SHV)
-            asset_i = self._tradable_idx[idx - self._n_tradable]
-            move = float(min(self.delta, w_prev[asset_i]))
-            w_new[asset_i] -= move
-            w_new[self._shv_idx] += move
-
-        # softmax(log(w)) = w (∑w=1) — 원본 env의 softmax 계약을 그대로 유지한다.
-        return np.log(np.clip(w_new, self._EPS, 1.0)).astype(np.float32)
+        return discrete_action_to_logits(
+            w_prev,
+            int(discrete_action),
+            shv_idx=self._shv_idx,
+            tradable_idx=self._tradable_idx,
+            delta=self.delta,
+        )

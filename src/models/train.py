@@ -31,12 +31,14 @@ from gymnasium import spaces
 
 from src.config_loader import (
     force_utf8_stdout,
+    get_action_delta,
     get_active_combo,
     get_state_dim,
     load_config_for_combo,
 )
 from src.data import feature_store as fs
 from src.env.portfolio_env import PortfolioEnv
+from src.models.loader import get_algorithm, is_discrete
 
 
 class _BoundedActionWrapper(gym.ActionWrapper):
@@ -86,6 +88,11 @@ def load_fold_env(
     `cost_multiplier`(λ, 개선안 A)와 `vol_penalty_coef`(κ, 개선안 D)는 모두 학습 보상에만
     거는 셰이핑 장치라 **train split에만** 넘긴다. 기본값(1.0·0.0)이라 평가·백테스트
     호출부는 실비용 그대로·페널티 없이 벤치마크와 같은 자로 측정된다.
+
+    `model.algorithm`이 DQN이면(개선안 B, 행동 연속성) `_BoundedActionWrapper` 대신
+    `DiscretePortfolioEnv`로 감싼다 — DQN은 이산 행동만 다루고, 하루 이전폭이 Δ로 묶여
+    turnover가 구조적으로 2Δ 이하로 제한된다. 어느 래퍼를 쓸지는 cfg만 보고 정해지므로
+    `evaluate()`처럼 알고리즘을 모르는 호출부도 학습과 같은 env 계약을 얻는다.
     """
     out_dir = cfg["data"]["feature_store_dir"]
     state_df = fs.load_features(out_dir, fold_id, split)
@@ -97,6 +104,10 @@ def load_fold_env(
         cost_multiplier=cost_multiplier,
         vol_penalty_coef=vol_penalty_coef,
     )
+    if is_discrete(cfg):
+        from src.env.discrete_env import DiscretePortfolioEnv
+
+        return DiscretePortfolioEnv(env, delta=get_action_delta(cfg))
     bound = float(cfg.get("model", {}).get("action_bound", 10.0))
     return _BoundedActionWrapper(env, bound=bound)
 
@@ -175,7 +186,6 @@ def train(
     os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
 
     import mlflow
-    from stable_baselines3 import PPO
 
     # 콤보를 반영한 cfg — features(→state_dim)와 data 경로가 모두 그 콤보 것으로 바뀐다.
     # 이후 load_fold_env·evaluate·PortfolioEnv는 콤보를 몰라도 올바른 Feature Store를 읽는다.
@@ -183,10 +193,11 @@ def train(
     combo_name = get_active_combo(cfg, combo)
     model_cfg = cfg.get("model", {})
 
-    algorithm = model_cfg.get("algorithm", "PPO")
-    if algorithm != "PPO":
-        # 1차 알고리즘은 PPO로 확정(CLAUDE.md §3). SAC 비교는 별도 스크립트로 추가할 것.
-        raise NotImplementedError(f"현재는 PPO만 지원합니다: {algorithm!r}")
+    # 1차 알고리즘은 PPO(CLAUDE.md §3). DQN은 이슈 #34 개선안 B(행동 연속성) 실험용으로,
+    # 이산 어댑터가 하루 이전폭을 Δ로 묶어 turnover를 구조적으로 제한한다. SAC는 미지원.
+    algorithm = get_algorithm(cfg)
+    if algorithm not in ("PPO", "DQN"):
+        raise NotImplementedError(f"현재는 PPO·DQN만 지원합니다: {algorithm!r}")
 
     # fold_id는 1부터 시작한다 (src/data/splits.py::make_folds가 1-indexed로 생성).
     fold_id = fold_id if fold_id is not None else int(model_cfg.get("fold_id", 1))
@@ -252,26 +263,55 @@ def train(
                 "seed": seed,
             }
         )
+        if is_discrete(cfg):
+            # Δ (이슈 #34 개선안 B) — 이 값이 turnover 상한 2Δ를 정하므로 run마다 남긴다.
+            mlflow.log_param("action_delta", get_action_delta(cfg))
 
-        ppo_kwargs = {"seed": seed, "verbose": 1}
-        if "n_steps" in model_cfg:
-            # SB3 기본값(2048) 오버라이드 — 짧은 fold·테스트에서 rollout을 줄이는 용도.
-            ppo_kwargs["n_steps"] = int(model_cfg["n_steps"])
-        # PPO 안정화 하이퍼파라미터 — config에 있을 때만 넘겨 SB3 기본값을 보존한다.
-        # 이슈 #34에서 `clip_fraction 0.33`·`approx_kl 0.038`로 업데이트가 과격한 것이
-        # 관측돼(과매매 원인 후보) 튜닝 통로를 연다. §2(보상·행동공간)와 무관한 학습 설정이다.
-        for key, cast in (("learning_rate", float), ("target_kl", float), ("ent_coef", float)):
-            if model_cfg.get(key) is not None:
-                ppo_kwargs[key] = cast(model_cfg[key])
-        mlflow.log_params({k: ppo_kwargs[k] for k in ("learning_rate", "target_kl", "ent_coef")
-                           if k in ppo_kwargs})
-        model = PPO(policy, env, **ppo_kwargs)
+        if algorithm == "DQN":
+            from stable_baselines3 import DQN
+
+            # DQN 하이퍼파라미터도 PPO와 같은 규약 — config에 있을 때만 넘겨 SB3 기본값 보존.
+            algo_kwargs: dict = {"seed": seed, "verbose": 1}
+            for key, cast in (
+                ("learning_rate", float),
+                ("buffer_size", int),
+                ("learning_starts", int),
+                ("batch_size", int),
+                ("gamma", float),
+                ("train_freq", int),
+                ("target_update_interval", int),
+                ("exploration_fraction", float),
+                ("exploration_final_eps", float),
+            ):
+                value = model_cfg.get("dqn", {}).get(key, model_cfg.get(key))
+                if value is not None:
+                    algo_kwargs[key] = cast(value)
+            mlflow.log_params({f"dqn_{k}": v for k, v in algo_kwargs.items() if k != "verbose"})
+            model = DQN(policy, env, **algo_kwargs)
+        else:
+            from stable_baselines3 import PPO
+
+            ppo_kwargs = {"seed": seed, "verbose": 1}
+            if "n_steps" in model_cfg:
+                # SB3 기본값(2048) 오버라이드 — 짧은 fold·테스트에서 rollout을 줄이는 용도.
+                ppo_kwargs["n_steps"] = int(model_cfg["n_steps"])
+            # PPO 안정화 하이퍼파라미터 — config에 있을 때만 넘겨 SB3 기본값을 보존한다.
+            # 이슈 #34에서 `clip_fraction 0.33`·`approx_kl 0.038`로 업데이트가 과격한 것이
+            # 관측돼(과매매 원인 후보) 튜닝 통로를 연다. §2(보상·행동공간)와 무관한 학습 설정이다.
+            for key, cast in (("learning_rate", float), ("target_kl", float), ("ent_coef", float)):
+                if model_cfg.get(key) is not None:
+                    ppo_kwargs[key] = cast(model_cfg[key])
+            mlflow.log_params({k: ppo_kwargs[k] for k in ("learning_rate", "target_kl", "ent_coef")
+                               if k in ppo_kwargs})
+            model = PPO(policy, env, **ppo_kwargs)
         model.learn(total_timesteps=total_timesteps)
 
-        # 파일명에 콤보와 build run_id를 박아, 어느 피처셋·정규화 통계로 학습됐는지
-        # 파일만 봐도 알 수 있게 한다(콤보별 policy를 한 디렉토리에 섞어둬도 구분됨).
+        # 파일명에 알고리즘·콤보·build run_id를 박아, 무엇으로 어떻게 학습됐는지 파일만 봐도
+        # 알 수 있게 한다(PPO·DQN policy를 한 디렉토리에 섞어둬도 구분되고, 로드할 클래스도
+        # 파일명으로 드러난다 — 실제 로드 판단은 config의 model.algorithm이 단일 출처다).
         model_path = (
-            model_dir / f"ppo_{combo_name or 'full'}_fold{fold_id}_{fs_tag}_{run.info.run_id}.zip"
+            model_dir
+            / f"{algorithm.lower()}_{combo_name or 'full'}_fold{fold_id}_{fs_tag}_{run.info.run_id}.zip"
         )
         model.save(str(model_path))
         mlflow.log_artifact(str(model_path))
@@ -282,6 +322,8 @@ def train(
         result = {
             "run_id": run.info.run_id,
             "model_path": str(model_path),
+            # 소비처(experiment.py·runner.py)가 어느 SB3 클래스로 읽어야 하는지 알 수 있게 한다.
+            "algorithm": algorithm,
             "fold_id": fold_id,
             "seed": seed,
             "feature_set": combo_name or "full",

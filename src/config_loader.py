@@ -116,6 +116,18 @@ def get_transaction_cost(cfg: dict) -> float:
     return float(cfg["transaction_cost"])
 
 
+def get_action_delta(cfg: dict) -> float:
+    """이산 행동(DQN)의 스텝당 SHV↔자산 이전폭 Δ를 반환한다 (기본 0.1, docs/env_spec.md §4-4).
+
+    학습(DiscretePortfolioEnv)과 백테스트(src.backtest.policy)가 같은 값을 봐야 두 경로의
+    비중 궤적이 일치하므로 config를 단일 출처로 둔다.
+    """
+    delta = float(cfg.get("model", {}).get("action_delta", 0.1))
+    if not (0.0 < delta <= 1.0):
+        raise ValueError(f"model.action_delta는 (0, 1] 범위여야 합니다: {delta}")
+    return delta
+
+
 def get_asset_features(cfg: dict) -> list[str]:
     """자산별 지표 이름 목록을 반환한다 (config.features.asset).
 

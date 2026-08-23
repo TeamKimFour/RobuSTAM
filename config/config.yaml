@@ -106,12 +106,30 @@ normalize:
 # 1차 알고리즘은 PPO(CLAUDE.md §3). fold_id는 §4-1 walk-forward 분할의 인덱스
 # (src/data/splits.py::make_folds가 1부터 매김 — 1=Fold1, 0은 존재하지 않음).
 model:
+  # "PPO"(1차 확정, CLAUDE.md §3) 또는 "DQN"(이슈 #34 개선안 B, 행동 연속성 실험).
+  # DQN으로 두면 학습 env가 DiscretePortfolioEnv로 감싸이고(행동 9개), 백테스트·추론도
+  # 같은 Δ 이전 규칙으로 비중을 굴린다 — 세 경로가 하나의 계약을 공유한다.
   algorithm: "PPO"
   policy: "MlpPolicy"
   fold_id: 1
   total_timesteps: 200000
   seed: 42
   action_bound: 10.0                   # SB3용 유한 bound (env 자체는 -inf~+inf 로짓, train.py가 래핑)
+  # Δ — 이산 행동(algorithm: DQN)에서 한 스텝에 SHV↔자산 사이로 옮길 수 있는 최대 비중.
+  # 하루 이전량이 Δ로 묶이므로 turnover가 구조적으로 2Δ 이하가 된다(개선안 B의 핵심).
+  # algorithm이 PPO면 읽지 않는다. 상세는 docs/env_spec.md §4-4.
+  action_delta: 0.1
+  # DQN 하이퍼파라미터 — 적은 키만 두고 나머지는 SB3 기본값을 쓴다(PPO 규약과 동일).
+  # 여기 없는 키는 넘기지 않으므로, 값을 지우면 곧바로 SB3 기본값으로 돌아간다.
+  dqn:
+    learning_rate: 0.0001
+    buffer_size: 100000
+    learning_starts: 5000
+    batch_size: 64
+    train_freq: 4
+    target_update_interval: 1000
+    exploration_fraction: 0.2          # 학습 앞 20% 구간에서 ε를 1.0 → exploration_final_eps로 감쇠
+    exploration_final_eps: 0.05
   # λ — 학습 보상에만 거는 거래비용 가중치 (이슈 #34 개선안 A, 보상 셰이핑).
   # R_train = log_return − λ·c·turnover 로 과매매를 더 세게 벌한다. 1.0 = 셰이핑 없음(기본).
   # ⚠️ 평가(train.py evaluate)·백테스트(src/backtest)는 이 값을 쓰지 않는다 — 성과는 항상
