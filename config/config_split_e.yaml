@@ -1,0 +1,121 @@
+# RobuSTAM 설정 — 분할(split) 후보 E 실험용 대안 config (SSOT 아님)
+#
+# src/data/screen_splits.py의 CANDIDATE_SPLITS["E_rolling_8y_annual"]을 실제 RL로 검증하기
+# 위한 config.yaml 사본이다. config.yaml(SSOT)의 split 섹션은 그대로 두고, 이 파일에서만
+# split을 바꿔치기했다 — 두 곳:
+#   1. split: expanding(anchor 2010 고정) → rolling(직전 8년 고정, 매 fold 동일 학습량)
+#   2. data.feature_store_dir/meta_db: "data/feature_store" → "data/feature_store_split_e"
+#      (기존 production Feature Store를 절대 덮어쓰지 않도록 완전히 분리된 경로)
+#
+# 사용법(도현):
+#   python -m src.models.train --config config/config_split_e.yaml --combo full --fold-id 1
+#   python -m src.models.experiment --config config/config_split_e.yaml --combos full M0 M1 M2 M3
+#   (fold_id 범위는 1~7 — test_blocks가 7개라 runner._fold_ids()가 자동으로 7개를 순회한다.
+#    train.py/experiment.py 모두 --fold-id 개수를 하드코딩하지 않으므로 코드 수정 불필요.)
+#
+# 이 config로 학습한 run은 MLflow에 feature_set·state_dim은 그대로 남지만 어느 split
+# 후보였는지는 안 남는다 — 필요하면 학습 후 verdict/param에 split=E를 수동으로 태깅할 것.
+#
+# 결과가 좋아서 실제로 채택하기로 하면, 그때 config.yaml의 split을 이걸로 바꾸고
+# docs/data_pipeline.md §4-1을 갱신한다(팀 합의 필요, CLAUDE.md §6-2).
+
+# ── 자산 유니버스 (순서 고정, 절대 변경 금지 — CLAUDE.md §2) ──
+assets: ["SPY", "EWY", "TLT", "GLD", "SHV"]
+
+window: 30
+
+transaction_cost: 0.001
+
+data:
+  start: "2009-10-01"
+  end: "2025-12-31"
+  warmup_buffer_days: 60
+  min_rows: 1000
+  raw_dir: "data/raw"                                       # 원시가격은 공용 캐시 그대로 재사용
+  feature_store_dir: "data/feature_store_split_e"           # ← production과 분리
+  meta_db: "data/feature_store_split_e/meta.sqlite"          # ← production과 분리
+  s3_bucket: "robustam-teamkimfour"
+  s3_prefix: "robustam"
+  precompute_path: "data/precompute/latest.json"
+
+feature_combos:
+  full:
+    asset: ["MA_Cross_5_20", "RSI_14", "MACD_Hist", "Rolling_Vol_20", "Bollinger_Band_Width", "ROC_10"]
+    market: ["Equity_Bond_Ratio", "Gold_Vol_Ratio"]
+  M0:
+    asset: []
+    market: ["Equity_Bond_Ratio"]
+  M1:
+    asset: ["MACD_Hist", "Rolling_Vol_20"]
+    market: ["Equity_Bond_Ratio"]
+  M2:
+    asset: ["MACD_Hist", "Rolling_Vol_20", "RSI_28"]
+    market: ["Equity_Bond_Ratio"]
+  M3:
+    asset: ["MACD_Hist", "Rolling_Vol_20", "RSI_28"]
+    market: ["Equity_Bond_Ratio", "Drawdown"]
+
+active_combo: "full"
+
+features:
+  asset:
+    ["MA_Cross_5_20", "RSI_14", "MACD_Hist", "Rolling_Vol_20", "Bollinger_Band_Width", "ROC_10"]
+  market:
+    ["Equity_Bond_Ratio", "Gold_Vol_Ratio"]
+  params:
+    sma_fast: 5
+    sma_slow: 20
+    rsi_length: 14
+    rsi_28_length: 28
+    macd: [12, 26, 9]
+    vol_window: 20
+    bbands: [20, 2]
+    roc_length: 10
+    annualize_vol: false
+    ebr_ma_window: 20
+    gvr_long_window: 60
+    drawdown_lookback: 60
+
+# ── walk-forward 분할 — 후보 E: rolling(직전 8년 고정) + 연 단위 test 7개 ──
+# screen_splits.py 실측(2026-08-11): 평균 max|z| 드리프트가 A(현행, 12.50)보다 낮음(9.13,
+# 5개 후보 중 최소). fold마다 train 크기가 동일(1764거래일=8년)해 fold 간 비교도 공정해진다.
+split:
+  mode: "rolling"
+  rolling_train_days: 2016              # 8년 × 252 거래일 — anchor_start는 rolling에서 안 씀
+  test_blocks:
+    - ["2019-01-01", "2019-12-31"]
+    - ["2020-01-01", "2020-12-31"]
+    - ["2021-01-01", "2021-12-31"]
+    - ["2022-01-01", "2022-12-31"]
+    - ["2023-01-01", "2023-12-31"]
+    - ["2024-01-01", "2024-12-31"]
+    - ["2025-01-01", "2025-12-31"]
+  valid_days: 252
+  embargo_days: 34
+
+normalize:
+  method: "zscore"
+  returns_scope: "per_asset"
+  feature_scope: "per_column"
+  eps: 1.0e-8
+
+model:
+  algorithm: "PPO"
+  policy: "MlpPolicy"
+  fold_id: 1
+  total_timesteps: 200000
+  seed: 42
+  action_bound: 10.0
+  train_cost_multiplier: 1.0
+  vol_penalty_coef: 0.0
+  vol_penalty_window: 20
+  mlflow_tracking_uri: "http://localhost:5000"
+  mlflow_experiment: "robustam-ppo"
+  mlflow_screening_experiment: "robustam-screening"
+  model_dir: "mlruns/models"
+
+inference:
+  model_path: "mlruns/models/ppo_fold1_b461a86027e2-20260718102003_50db7bc4c4a541bb843c6d58d190bee5.zip"
+  scaler_run_id: ""
+  scaler_fold_id: 1
+  model_version: "ppo-fold1-50db7bc4"
