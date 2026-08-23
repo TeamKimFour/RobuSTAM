@@ -16,7 +16,8 @@
 | 로그수익률·윈도우 | `src/data/returns.py` | ✅ 구현 |
 | 기술적 지표(콤보별 부분집합) | `src/data/features.py` | ✅ 구현 (M0~M3 지원, §3-2) |
 | State 조립(콤보별 D) | `src/data/assemble.py` | ✅ 구현 |
-| walk-forward 분할 | `src/data/splits.py` | ✅ 구현 |
+| walk-forward 분할(expanding·rolling) | `src/data/splits.py` | ✅ 구현 |
+| 분할 후보 비교 | `src/data/screen_splits.py` | ✅ 구현 (탐색 단계, §4-1-1) |
 | z-score 정규화 | `src/data/normalize.py` | ✅ 구현 |
 | Feature Store 입출력 | `src/data/feature_store.py` | ✅ 구현 (scaler_stats·targets·콤보별 경로 포함) |
 | 빌드 오케스트레이터 | `src/data/build.py` | ✅ 구현 (실데이터 적재, 콤보별 빌드 지원) |
@@ -68,8 +69,11 @@ yfinance ──collect.py──> data/raw/prices_raw.parquet   (조정종가, �
 - **`assemble.py`** — 수익률 윈도우 + 지표 + prev_weight(0)를 schema 슬라이스로 wide 조립(콤보에
   따라 폭이 달라짐). 컬럼 = `feature_names(W, asset_features, market_features)`, 시장지표는
   자산별 복제 없이 단일 배치.
-- **`splits.py`** — Expanding walk-forward `Fold` 생성(`make_folds`). anchor 고정·train 누적,
-  test 블록 전진, train↔test 사이 embargo 거래일 갭.
+- **`splits.py`** — walk-forward `Fold` 생성(`make_folds`), `expanding`(anchor 고정·train
+  누적)·`rolling`(train_all 길이 고정, §4-1) 두 모드. test 블록 전진, train↔test 사이 embargo
+  거래일 갭은 두 모드 공통.
+- **`screen_splits.py`** — 분할(split) 재구성 후보를 실데이터로 비교(분포 드리프트·fold 크기).
+  RL 재학습 없이 값싸게 스크리닝하는 도구(§4-1-1). `config.yaml`의 `split`은 건드리지 않는다.
 - **`normalize.py`** — `ZScoreScaler`(fit/transform 분리). μ/σ는 **fold train에서만 fit**,
   valid/test는 적용만. 수익률 per_asset·지표 per_column·prev_weight 제외·std=0 가드. 통계 직렬화(`scaler_stats`).
   `feat_`/`mkt_` 컬럼을 이름 기반으로 순회하므로 콤보별 폭 변화에 별도 대응 불필요.
@@ -212,10 +216,48 @@ test 블록은 국면별 OOS 검증(CLAUDE.md 목표)에 맞춰 2년 단위:
 | 2 | 2010–2021 | 2022–2023 | 고금리·채권 급락 |
 | 3 | 2010–2023 | 2024–2025 | 최근 |
 
-- **Expanding(2010 고정, train 누적)** 채택: 10년 기반을 유지하면서 fold마다 최근 데이터를 반영하고
-  정규화 통계를 재fit해 분포 드리프트를 막는다.
+- **Expanding(2010 고정, train 누적)** 채택(현재 `config.yaml`의 `active` 설정): 10년 기반을
+  유지하면서 fold마다 최근 데이터를 반영하고 정규화 통계를 재fit해 분포 드리프트를 막는다.
 - 각 fold train 마지막 ~1년(`valid_days: 252`)을 validation으로 분리.
 - train↔test 사이 `embargo_days: 34`(≥ 최장 지표 lookback) 갭으로 경계 누수 차단.
+
+**`rolling` 모드 추가(6주차, 민지 — 탐색 단계, 아직 미채택)**: `docs/model_diagnosis.md` §3이
+진단한 "train→test 분포 이동(최대 22σ)"에 대응해 `splits.make_folds`가 `split.mode: "rolling"`도
+지원하게 됐다. `anchor_start` 대신 `rolling_train_days`(거래일)로 train_all 길이를 고정하고,
+test 직전부터 그만큼만 뒤로 잘라 쓴다 — fold마다 train 크기가 같아지고, 오래된 국면이 최근 국면
+예측에 계속 섞이는 것을 막을 수 있다. `src/data/screen_splits.py`가 RL 재학습 없이 분할 후보들의
+분포 드리프트·fold 크기를 실데이터로 비교한다(§4-1-1). **`config.yaml`의 `split`은 여전히
+`expanding`이며, 다른 모드로 바꾸는 것은 팀 합의가 필요하다**(CLAUDE.md §2 핵심 규칙과 동급은
+아니지만 전 팀원이 공유하는 walk-forward 계약이라 동일하게 취급).
+
+#### 4-1-1. 분할 후보 비교 (실측, 2026-08-11, `python -m src.data.screen_splits`)
+
+Baseline(A, 현행)을 포함해 5개 후보를 실데이터로 비교했다:
+
+| 후보 | 분할 방식 | fold 개수 | train 크기(평균) | train 크기 편차 | 평균 max\|z\| | 최악 max\|z\| |
+|---|---|---|---|---|---|---|
+| A_baseline_expanding_2y | expanding | 3 | 2734 | 1006(fold마다 다름) | 12.50 | 22.14 |
+| B_rolling_8y_2y_blocks | rolling(8y) | 3 | 1764 | 0(고정) | 12.25 | 21.52 |
+| C_rolling_5y_2y_blocks | rolling(5y) | 3 | 1008 | 0(고정) | 10.21 | **17.45**(최소) |
+| D_expanding_annual | expanding | 7 | 2734 | 1510 | 9.66 | 22.14 |
+| E_rolling_8y_annual | rolling(8y) | 7 | 1764 | 0(고정) | **9.13**(최소) | 21.52 |
+
+**관찰**:
+- **연 단위로 fold를 세분화하면(D·E) 평균 드리프트가 뚜렷이 준다**(12.5→9.1~9.7) — fold당 test
+  구간이 짧아져 극단치 하루가 fold 평균에 미치는 영향이 줄고, OOS 관측 수(3→7)도 늘어 통계적
+  검정력이 커진다(도현이 PR #73에서 "fold 3개·seed 1개는 통계적으로 약하다"고 지적한 것과 직결).
+- **COVID 최악치(22.14σ)는 어떤 분할로도 못 없앤다** — 2020-03-09 자체가 시장 전체의 진짜 극단치라,
+  train 윈도우를 줄이거나 늘려도 그 하루는 항상 학습 분포 밖이다. "분포 이동"의 평균은 줄일 수
+  있어도 꼬리 위험은 분할만으로 해결되는 문제가 아니다.
+- rolling은 train 크기를 fold마다 동일하게 만들어(편차 0) fold 간 비교가 공정해진다는 방법론적
+  이점이 있다 — expanding은 fold3가 fold1보다 train이 1000일 이상 많아, fold별 성능 차이가
+  국면 때문인지 데이터 양 때문인지 섞여 보일 수 있다.
+- C(rolling 5년)가 최악치 기준으로는 가장 안전하지만 train 데이터가 가장 적다(1008일≈4년) —
+  분포는 안정되지만 학습 표본이 줄어드는 트레이드오프가 있다.
+- **잠정 결론**: E(rolling 8년 + 연 단위 fold)가 평균 드리프트 최소·fold당 학습량 유지·통계적
+  검정력 확보를 동시에 만족해 가장 유망해 보인다. 다만 이건 데이터 레벨 사전 필터일 뿐 — feature
+  combo 스크리닝(§3-2)과 마찬가지로 **RL 성능을 보장하지 않는다.** 실제 채택 여부는 후보를 골라
+  도현 RL로 재학습해 검증한 뒤 팀 합의로 확정한다.
 
 ### 4-2. 데이터 기간 — 2009-10 ~ 2025-12
 목표 시작(2010-01)보다 약 60거래일(`warmup_buffer_days`) 앞당겨 받는다. 2주차 지표(MACD ~34일
@@ -586,3 +628,4 @@ S3에 업로드될 수 있는** 검증되지 않은 경로였다. `get_precomput
 | v0.19 | 2026-07-28 | §8-3 순서에 백테스트 리포트 스텝 추가: `daily.yml`이 precompute 뒤·S3 업로드 앞에서 `python -m src.backtest.export --upload-s3`를 실행(같은 gate·continue-on-error 패턴). 상세는 `docs/backtest_engine.md` §4-4. |
 | v0.20 | 2026-08-09 | §3-2 신설: 피처 콤보 시스템(M0~M3, PR #68의 가변 D 배관 위에 `config.yaml` `feature_combos`/`active_combo` + `config_loader.resolve_combo` 추가). `features.py`가 콤보가 요청한 지표만 계산하도록 일반화(`RSI_28`·`Drawdown` 신규). §3-1 저장소 경로를 콤보별 분기로 갱신(`full`은 기존 경로 유지, 하위호환). M0~M3 실데이터 빌드 완료(`data/feature_store/{M0,M1,M2,M3}/`). `src/data/screen_combos.py` 신규: 콤보별 Ridge/GBM rank-IC·R²·mean\|IC\|·분포드리프트를 계산해 MLflow(`run_type=screening`)에 기록, 로컬 파일스토어 사용(`MLFLOW_ALLOW_FILE_STORE` 우회 포함). `active_combo` 기본값 `full`이라 env·train.py·daily.yml은 무영향 — 실제 RL 연결은 후속 작업(도현). |
 | v0.21 | 2026-08-09 | 도현 PR #69 리뷰 반영: (1) verdict 판정을 `sign_stable_frac`(콤보마다 분모가 달라 비교 불가) 게이트에서 콤보 간 직접 비교 가능한 `ridge_rank_ic`/`gbm_rank_ic` 기준으로 교체, `n_unstable_features`(절대량) 메트릭 추가 — M2·M3가 FAIL→PASS로 정정됨(`docs/feature_candidates.md` §5-1). (2) 스크리닝 MLflow run을 `robustam-ppo`(RL 학습)와 분리된 `robustam-screening` experiment로 이동. (3) 구버전 `meta.sqlite`(콤보 도입 전)에 `combo` 컬럼 마이그레이션 추가 — `runs` 테이블 6→7컬럼 불일치로 재빌드가 깨지던 문제 실제 재현 후 수정. (4) `tests/test_variable_state_dim.py`에 D=156(K_asset=0, M0) 케이스 추가 — 형우 PR #68 검증 범위(K_asset∈{2,3})에 없던 조합이었음을 리뷰로 발견, env·PPO 왕복 정상 확인. |
+| v0.22 | 2026-08-11 | §4-1 확장(민지, 6주차 "데이터 재구성"): `splits.make_folds`에 `rolling` 모드 추가(`split.rolling_train_days`로 train_all 길이 고정, `expanding`은 무변경·하위호환). `src/data/screen_splits.py` 신규: RL 재학습 없이 분할 후보(방식·fold 개수·train 기간) 5종을 실데이터로 비교해 분포 드리프트·fold 크기를 낸다(§4-1-1). 실측 결과 fold를 연 단위로 세분화하면 평균 드리프트가 뚜렷이 줄고(12.5→9.1), COVID 최악치(22σ)는 분할로 해결 안 됨을 확인. `config.yaml`의 `split`은 여전히 기존 expanding 3-fold — 채택은 RL 검증·팀 합의 후. |
