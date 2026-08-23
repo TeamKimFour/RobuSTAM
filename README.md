@@ -37,7 +37,7 @@ make help
 | `make mlflow-logs` / `mlflow-health` / `mlflow-smoke` | 로그 추적 · 헬스체크 · 더미 run 1건 기록 |
 | `make build-features [FEATURE_SET=M1]` | Feature Store 빌드 |
 | `make screen` | 콤보 스크리닝 + MLflow 기록 |
-| `make train [FEATURE_SET=M1] [FOLD=1] [SEED=42] [TIMESTEPS=200000]` | PPO 학습 |
+| `make train [FEATURE_SET=M1] [FOLD=1] [SEED=42] [TIMESTEPS=200000]` | RL 학습 (기본 PPO. `config.model.algorithm: DQN`이면 이산 행동 학습 — docs/model_training.md §7-5) |
 | `make backtest [FEATURE_SET=M1] [FOLD=1] [SPLIT=test]` | policy vs 벤치마크 백테스트 |
 | `make experiment [COMBOS="full M0 M1"] [TIMESTEPS=200000]` | 콤보 실험 러너 (학습→백테스트→3지표 판정) |
 | `make test` / `test-data` / `test-model` / `test-backtest` | 테스트 (`make test`는 CI와 동일) |

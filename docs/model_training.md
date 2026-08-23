@@ -41,13 +41,17 @@ data/feature_store/fold=<id>/split=train  ──load_fold_env──>  PortfolioE
 
 - **`load_fold_env(cfg, fold_id, split)`** — `feature_store.load_features`/`load_targets`로
   지정 fold/split을 읽어 `PortfolioEnv`를 만들고, `_BoundedActionWrapper`로 감싸 반환한다.
+  `config.model.algorithm`이 `DQN`이면 대신 `DiscretePortfolioEnv`(§7)로 감싼다 — 래퍼 선택이
+  cfg만 보고 갈리므로 `evaluate()`처럼 알고리즘을 모르는 호출부도 학습과 같은 env를 받는다.
 - **`_BoundedActionWrapper`** — SB3 PPO는 연속 행동공간에 유한 상하한을 요구하지만,
   `PortfolioEnv.action_space`는 정책망 로짓을 그대로 받는 `-inf~+inf` Box다(softmax는
   env `step()` 내부 처리, 팀 계약). env 자체는 바꾸지 않고, SB3에 보여줄 bound만
   `config.model.action_bound`(기본 10)로 좁힌다 — 값은 그대로 통과(identity transform).
 - **`train(config_path, fold_id, total_timesteps)`** — config `model` 섹션에서 하이퍼파라미터를
   읽어 PPO를 학습하고 MLflow run 안에서 파라미터·valid 지표·policy 아티팩트(`.zip`)를 기록한다.
-  1차 알고리즘은 PPO만 지원(CLAUDE.md §3, SAC 시도 시 `algorithm` 분기 추가 필요).
+  1차 알고리즘은 PPO(CLAUDE.md §3)이고, 이슈 #34 개선안 B 실험용으로 `DQN`을 함께 지원한다
+  (SAC는 미지원 — `algorithm` 분기 추가 필요). policy 파일명은 `{algorithm}_{combo}_fold…`라
+  PPO·DQN이 한 디렉토리에 섞여도 구분된다.
   학습 fold를 만든 build `run_id`를 `feature_store.latest_run_id_for_fold`로 조회해 MLflow
   파라미터(`feature_store_run_id`)·모델 파일명·반환 dict에 provenance로 남긴다(이슈 #27) — 배포 시
   `config.inference.scaler_run_id`에 그대로 넣어 추론 정규화를 학습과 일치시키기 위함. CLI 실행
@@ -249,6 +253,34 @@ model = DQN("MlpPolicy", env, ...).learn(total_timesteps=...)
 DQN MVP는 파이프라인 결선용이며, 성능 검증은 5주차 PPO(연속 로짓) 전환 후 정식으로 한다.
 어댑터는 5주차 이후에도 대안 실험(이산 vs 연속)이 필요할 수 있어 유지한다.
 
+### 7-5. 이산 행동 학습 실행법 (이슈 #34 개선안 B)
+
+`config.model.algorithm`만 바꾸면 학습·백테스트·추론 세 경로가 함께 이산 규칙으로 넘어간다.
+경로마다 따로 켤 것이 없다 — Δ 이전은 `discrete_action_to_logits` 순수 함수 하나를 공유한다
+(docs/env_spec.md §4-5).
+
+```yaml
+model:
+  algorithm: "DQN"      # PPO → DQN
+  action_delta: 0.1     # Δ, 회전율 상한 2Δ를 정한다
+  dqn:                  # 여기 없는 키는 SB3 기본값을 그대로 쓴다
+    learning_rate: 0.0001
+    exploration_fraction: 0.2
+```
+
+```bash
+python -m src.models.train --fold-id 1 --total-timesteps 200000
+python -m src.backtest.policy --fold-id 1 --split test
+```
+
+실험 러너(§8)로 돌리면 `train()`이 돌려준 `algorithm`을 따라 policy를 읽으므로 콤보 실험과도
+그대로 맞물린다. MLflow에는 `algorithm`·`action_delta`·`dqn_*` 파라미터가 기록돼 PPO run과
+구분된다.
+
+**주의**: DQN은 이산 9개 행동만 낼 수 있어 하루에 한 자산만 Δ만큼 움직인다. 급락장 대응이
+느려질 수 있다는 개선안 B의 리스크(issue34_proposal §3 B)가 그대로 적용되므로, λ·κ 실험과
+같은 판정 기준(비중편차·회전율·샤프)으로 함께 본다.
+
 ---
 
 ## 8. 피처 조합 실험 러너 (`src/models/experiment.py`)
@@ -351,8 +383,14 @@ Feature Store를 읽는다.
 - **precompute 연동**: 학습된 `.zip`을 로드해 `docs/data_pipeline.md §8`의 latest.json을
   생성하는 스크립트 — `src/inference/precompute.py`로 구현 완료, 남은 건 §6 선택값을
   `config.inference`에 실제로 채우는 배포 단계.
-- **SAC 비교**: `train()`의 `algorithm` 분기가 현재 PPO만 지원 — SAC 추가 시 액션 래퍼는
+- **SAC 비교**: `train()`의 `algorithm` 분기가 현재 PPO·DQN만 지원 — SAC 추가 시 액션 래퍼는
   그대로 재사용 가능(SB3 SAC도 유한 bound 요구는 동일).
+- **DQN 배포 후보 선정**: `select.py`는 policy 경로를 `ppo_fold{fold}_{fs}_{run}.zip`으로
+  **재조립**하는데, `train.py`가 실제로 저장하는 이름은 `{algorithm}_{combo}_fold{fold}_…`다.
+  콤보 도입(PR #73) 시점부터 이미 어긋나 있고 DQN에서는 접두어까지 갈리므로, 배포 경로에
+  태우려면 `select.py`가 MLflow run의 `feature_set`·`algorithm` 파라미터를 읽어 이름을
+  맞추도록 고쳐야 한다. 실험(학습→백테스트→판정)은 러너가 `train()` 반환 경로를 그대로
+  쓰므로 영향이 없다.
 
 ---
 

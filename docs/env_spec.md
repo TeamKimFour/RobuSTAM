@@ -178,6 +178,21 @@ softmax(log(w_new)) = w_new     (∑w_new=1일 때 정확)
 |---|---|---|---|
 | `delta` | `0.1` | `(0.0, 1.0]` | 스텝당 최대 이전량. 크면 학습 초기 탐험 폭이 크지만 과매매 유도. 작으면 벤치마크 근처에 오래 머무름. DQN MVP엔 0.1 사용. |
 
+**Δ의 단일 출처는 `config.model.action_delta`다** (`config_loader.get_action_delta`, 기본 0.1).
+학습(`train.load_fold_env`)·백테스트(`backtest.policy.run_policy`)·추론(`inference.precompute`)이
+모두 이 값을 읽는다 — 세 경로가 다른 Δ를 쓰면 백테스트가 학습과 어긋난 비중 궤적을 낸다.
+
+**turnover 상한**: 한 스텝에 SHV↔자산 사이로 최대 Δ만 옮기므로 회전율(L1)은 **2Δ 이하**로
+구조적으로 묶인다(콜드스타트 첫 배분 제외). 이것이 이슈 #34 개선안 B의 근거이며
+`tests/test_discrete_training.py::test_backtest_turnover_is_structurally_capped_by_delta`가 박제한다.
+
+### 4-5. 세 경로가 공유하는 이전 규칙
+
+Δ 이전 계산은 순수 함수 `discrete_action_to_logits(w_prev, action, *, shv_idx, tradable_idx, delta)`
+하나로 모았다(`src/env/discrete_env.py`). 어댑터·백테스트·추론이 각자 구현하면 조용히 갈라지므로,
+어댑터의 `action()`도 이 함수를 호출한다. 두 구현이 갈라지면
+`tests/test_discrete_training.py::test_pure_function_matches_wrapper_action`에서 잡힌다.
+
 ---
 
 ## 5. 파라미터 표 — `config.yaml` → env 소비처
@@ -189,6 +204,8 @@ env가 실제로 읽는 config 키만 정리(전체 스키마는 [config/config.
 | `assets` | `get_assets` | 자산 순서·이름·개수 A. `DiscretePortfolioEnv`는 `"SHV"` 존재 필수. | `[SPY, EWY, TLT, GLD, SHV]` | **변경 금지** (CLAUDE.md §2). SHV 제거 시 discrete env 생성 실패. |
 | `window` | `get_window` | 관측 shape 산출용 W (Softmax·step 로직엔 W가 직접 안 나타남; state_df 컬럼 검증에만 사용) | `30` | state_dim 재계산 필요(Feature Store 재빌드). W=20→137, 60→337. |
 | `transaction_cost` | `get_transaction_cost` | reward의 `c`. `cost = c × turnover`. | `0.001` (편도 0.1%) | 정책이 회전율에 얼마나 벌 받는지 결정. CLAUDE.md §2 확정. 민감도는 6주 실험 대상. |
+| `model.algorithm` | `models.loader.get_algorithm` | `PPO`면 `_BoundedActionWrapper`, `DQN`이면 `DiscretePortfolioEnv`로 감싼다(§4). 백테스트·추론의 행동 해석도 같은 키로 갈린다. | `"PPO"` | DQN 전환 시 행동공간이 이산 9개가 되고 회전율이 2Δ로 제한된다(이슈 #34 개선안 B). |
+| `model.action_delta` | `config_loader.get_action_delta` | `DiscretePortfolioEnv(delta=…)` — 스텝당 SHV↔자산 이전폭 Δ(§4-4). PPO 경로는 읽지 않는다. | `0.1` | 회전율 상한 2Δ가 바뀐다. 범위 `(0, 1]` 밖이면 로드 시점에 에러. |
 | `model.action_bound` | `train.py`가 소비 | env 자체엔 무해(action bound는 SB3 래핑에서만 사용) | `10.0` | 정책 로짓 범위. 너무 작으면 Softmax가 균등에 가까워져 학습 신호 약화, 너무 크면 극단 비중 진입해 회전율 폭발. |
 | `model.train_cost_multiplier` | `train.py`가 소비 | env 생성자 `cost_multiplier`(λ) 인자로 전달. 보상용 `c = c_real·λ`. **train split env에만** 넘긴다. | `1.0` | λ (개선안 A). 회전율 페널티 강도. 평가·백테스트는 항상 1.0(성과 측정 축 보존). 0 이하면 `ValueError`. |
 | `model.vol_penalty_coef` | `train.py`가 소비 | env 생성자 `vol_penalty_coef`(κ) 인자로 전달. **train split env에만** 넘긴다. 음수 거부. | `0.0` | κ (개선안 D). σ_recent 페널티 강도. 0=페널티 없음. 과하면 λ와 같은 붕괴(1/N 흉내) — 비중편차 감시. |
@@ -281,3 +298,4 @@ env를 사용하는 모든 코드가 지켜야 하는 5개 불변식.
 | v1.0 | 2026-07-27 | 최초 작성. 5주 정식 항목("환경 파라미터 정리"). PortfolioEnv·DiscretePortfolioEnv·reward 3개 모듈의 계약·하이퍼파라미터·불변식·함정을 SSOT로 정리. state_spec.md(State 차원)와 backtest_engine.md(회계 규약)를 참조하고 중복 서술은 피했다. |
 | v1.1 | 2026-07-29 | 학습 전용 거래비용 셰이핑 λ(이슈 #34 개선안 A) 반영: §3-1 생성자 표에 `cost_multiplier` 행·시그니처, §4 "④ 보상"에 `info["cost"]` 실비용 재계산·`shaped_cost` 추가, §5 표에 `model.train_cost_multiplier` 행. 보상식 `R = log_ret − λ·c·turnover`. λ=1에서 기존 동작 불변. |
 | v1.2 | 2026-07-30 | 위험조정 보상 κ(이슈 #34 개선안 D) 반영: §3-1에 `vol_penalty_coef` 행·시그니처, §4에 `vol_penalty`·`recent_vol`·④-1(κ 셰이핑) 추가, §5 표에 `model.vol_penalty_coef`·`vol_penalty_window` 행, §6 입력 계약에 `vol_penalty_coef`·`recent_vol`. 보상식 `R = log_ret − λ·c·turnover − κ·σ_recent`. κ=0에서 기존 동작 불변. |
+| v1.3 | 2026-08-22 | 이산 행동 학습 경로(이슈 #34 개선안 B) 반영: §4-4에 Δ 단일 출처(`model.action_delta`)·turnover 2Δ 상한, §4-5 공유 순수함수 `discrete_action_to_logits` 신설, §5 표에 `model.algorithm`·`model.action_delta` 행. `algorithm: PPO` 기본값에서 기존 동작 불변. |
