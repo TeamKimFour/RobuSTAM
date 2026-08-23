@@ -169,11 +169,15 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
             os.remove(tmp)
 
 
-def _load_policy(model_path: str):
-    """SB3 PPO 정책 로드 — 무거운 import는 여기서만. (도현 담당 파트)"""
-    from stable_baselines3 import PPO
+def _load_policy(model_path: str, algorithm: str = "PPO"):
+    """SB3 정책 로드 — 무거운 import는 여기서만. (도현 담당 파트)
 
-    return PPO.load(model_path)
+    algorithm은 config `model.algorithm`(PPO·DQN)을 그대로 받는다 — DQN policy를
+    PPO 클래스로 읽으면 로드 단계에서 깨지므로 소비처가 클래스를 고정하지 않는다.
+    """
+    from src.models.loader import load_policy
+
+    return load_policy(model_path, algorithm)
 
 
 def generate_latest(cfg: dict, model=None, now: str | None = None) -> dict:
@@ -181,17 +185,37 @@ def generate_latest(cfg: dict, model=None, now: str | None = None) -> dict:
 
     민지의 build_today_obs로 obs를 받아, policy predict → softmax(학습과 동일) →
     LatestInference 계약으로 원자적 기록한다. model 미지정 시 config inference.model_path에서
-    PPO를 로드한다(테스트는 목 모델 주입).
+    `model.algorithm`에 맞는 클래스로 로드한다(테스트는 목 모델 주입).
+
+    DQN(이슈 #34 개선안 B)이면 정책 출력이 로짓이 아니라 정수 action이므로, 학습·백테스트와
+    같은 함수로 직전 비중에 Δ 이전을 적용한 뒤 softmax에 넘긴다 — 세 경로가 같은 비중을 낸다.
     """
     prev = _read_prev_weights(cfg)
     obs, date = build_today_obs(cfg, prev)
 
     inf = get_inference(cfg)
+    from src.models.loader import get_algorithm, is_discrete
+
     if model is None:
-        model = _load_policy(inf["model_path"])
-    action = np.asarray(model.predict(obs, deterministic=True)[0], dtype=float)
+        model = _load_policy(inf["model_path"], get_algorithm(cfg))
+    raw_action = model.predict(obs, deterministic=True)[0]
 
     from src.env.portfolio_env import _softmax  # 학습 step()과 동일 softmax 재사용
+
+    if is_discrete(cfg):
+        from src.config_loader import get_action_delta
+        from src.env.discrete_env import discrete_action_to_logits
+
+        assets = list(schema.ASSETS)
+        action = discrete_action_to_logits(
+            np.asarray(prev, dtype=float),
+            int(np.asarray(raw_action).reshape(-1)[0]),
+            shv_idx=assets.index("SHV"),
+            tradable_idx=[i for i, a in enumerate(assets) if a != "SHV"],
+            delta=get_action_delta(cfg),
+        )
+    else:
+        action = np.asarray(raw_action, dtype=float)
 
     weights = _softmax(action)
     payload = {

@@ -187,9 +187,8 @@ def main() -> None:
     """
     import argparse
 
-    from stable_baselines3 import PPO
-
     from src.config_loader import force_utf8_stdout
+    from src.models.loader import get_algorithm, load_policy
 
     # 한글 리포트 출력이 cp949 콘솔에서 깨지지 않도록 고정(train.py와 동일 규약).
     force_utf8_stdout()
@@ -209,7 +208,8 @@ def main() -> None:
     model_path = args.model_path or get_inference(cfg).get("model_path")
     if not model_path:
         raise SystemExit("model_path가 없습니다 — --model-path 또는 config.inference.model_path")
-    model = PPO.load(model_path)
+    # PPO·DQN(개선안 B) 어느 쪽으로 학습됐는지는 config.model.algorithm이 단일 출처다.
+    model = load_policy(model_path, get_algorithm(cfg))
 
     fold_ids = [args.fold_id] if args.fold_id is not None else _fold_ids(cfg)
     for fold_id in fold_ids:

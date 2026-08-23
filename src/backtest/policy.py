@@ -88,9 +88,20 @@ def run_policy(
     DataFrame — index=date, 컬럼 `nav`·`cost`·`turnover` + 자산별 비중.
     """
     from src.env.portfolio_env import _softmax  # 학습 step()·precompute와 동일 softmax
+    from src.models.loader import is_discrete
 
     cfg = resolve_paths_for_combo(load_config(config_path), combo)
     assets = get_assets(cfg)
+    # 이산 행동(DQN, 개선안 B)이면 정책 출력이 로짓이 아니라 정수 action이다. 학습 어댑터와
+    # **같은 함수**로 Δ 이전을 적용해야 백테스트가 학습과 같은 비중 궤적을 재현한다.
+    discrete = is_discrete(cfg)
+    if discrete:
+        from src.config_loader import get_action_delta
+        from src.env.discrete_env import discrete_action_to_logits
+
+        delta = get_action_delta(cfg)
+        shv_idx = assets.index("SHV")
+        tradable_idx = [i for i, a in enumerate(assets) if a != "SHV"]
     W = get_window(cfg)
     # 지표 개수는 콤보마다 다르고, prev_weight 블록의 **시작 위치**가 여기에 달려 있다.
     # 카논(6+2) 기본값으로 슬라이스를 잡으면 M1(2+1) 등에서 엉뚱한 칸에 직전 비중을 써넣어
@@ -133,6 +144,16 @@ def run_policy(
         obs[prev_slice] = weights.astype(np.float32)
 
         action, _ = model.predict(obs, deterministic=deterministic)
+        if discrete:
+            # 정수 action → (직전 비중 기준) Δ 이전 → 로짓. 학습 경로와 동일 함수·동일 순서라
+            # softmax 근사오차(~1e-8)까지 같은 값이 나온다.
+            action = discrete_action_to_logits(
+                weights,
+                int(np.asarray(action).reshape(-1)[0]),
+                shv_idx=shv_idx,
+                tradable_idx=tradable_idx,
+                delta=delta,
+            )
         target = _softmax(np.asarray(action, dtype=np.float64))  # ④ 로짓 → 비중(합=1)
 
         new_nav, cost = engine.calc_nav(nav, weights, target, r)

@@ -286,9 +286,8 @@ def run_experiment(
     (fold·seed·학습량·λ·κ)은 `settings`로 전부 동일하게 고정된다.
     """
     # 무거운 의존성은 실행 시점에만 import (train.py와 동일 규약).
-    from stable_baselines3 import PPO
-
     from src.backtest.runner import _fold_ids, run_fold
+    from src.models.loader import load_policy
     from src.models.train import train
 
     combos = list(combos or DEFAULT_COMBOS)
@@ -321,7 +320,8 @@ def run_experiment(
                 cost_multiplier=st.lam,
                 vol_penalty_coef=st.kappa,
             )
-            model = PPO.load(trained["model_path"])
+            # train()이 어느 알고리즘으로 학습했는지 돌려주므로 그대로 따라 읽는다(PPO·DQN).
+            model = load_policy(trained["model_path"], trained.get("algorithm", "PPO"))
             run_result = run_fold(fold_id, model, config_path, st.split, combo=combo)
             fm = fold_metrics_from_run(run_result, assets)
             fold_metrics.append(fm)
