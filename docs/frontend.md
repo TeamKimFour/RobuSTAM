@@ -33,17 +33,17 @@ Vercel 배포 대상 대시보드. Plotly.js로 자산 비중·성과곡선을 �
 - 3상태 표시: 로딩 스켈레톤 / 오류 카드(네트워크·503·기타 HTTP) / 정상.
 - 아직 API로 나오지 않는 카드(전일 변동성·특징 벡터·이력)는 `DemoBadge`로 명시.
 
-### `/backtest` — API 미연결(시연용)
+### `/backtest` — 실데이터 우선, 없으면 mock
 
 섹션 구성:
-- **핵심 지표**: KPI(CAGR/Sharpe/MDD/Vol) + 확장 리스크(Sortino, Calmar, VaR/CVaR 95%, Skew, Kurtosis, Beta, Hit Ratio, Best/Worst day).
-- **성과 vs 벤치마크**: 누적 NAV(1/N·60:40·B&H 오버레이), Drawdown 곡선, 전략 비교표, 벤치마크 대비 초과수익(α) 시계열.
-- **롤링·시즈널 분석**: Rolling Sharpe(252d)·Rolling Vol 이중축, 월별 수익률 히트맵.
-- **거래·비용**: 일일 Turnover 바 + 누적 거래비용(초기 NAV 대비 %) 이중축.
-- **자산 분해**: 자산별 누적 P&L 기여도 스택 영역, 자산 상관계수 히트맵, walk-forward Fold별 성과표.
-- **극단·수중 분석**: Underwater 지속기간 히스토그램, Best·Worst 10 거래일.
-- 모든 시계열은 `app/backtest/mock.ts`에서 결정론적으로 파생(seed 고정, 자산 5종의 일별 mock 수익률과 mock 비중 스케줄로부터 NAV/turnover/기여도 등이 일관되게 계산됨).
-- 백엔드 백테스트 결과 조회 엔드포인트 확정 시 `mock.ts` → API fetch로 교체.
+- **국면 격자 스위처(상단)**: `전 구간 · COVID · 고금리 · 최근` 4단 세그먼트 컨트롤. URL 쿼리(`?regime=fold1` 등)로 상태를 관리해 SSR·공유 URL과 자연스럽게 맞물린다. fold ↔ 국면 매핑은 `docs/data_pipeline.md §4-1`(Fold 1=2020–2021 COVID / Fold 2=2022–2023 고금리 / Fold 3=2024–2025 최근)이 SSOT이며, `app/backtest/regime.ts`에 이관되어 있다. 민지 별도 국면 라벨 데이터셋이 붙기 전까지는 fold 단위가 사실상 국면 격자다.
+- **핵심 지표**: KPI(CAGR/Sharpe/MDD/Vol) + 확장 리스크(Sortino, Calmar, VaR/CVaR 95%, Skew, Kurtosis, Beta, Hit Ratio, Best/Worst day). 국면 필터 적용 시 KPI 4종은 국면 구간에서 재산출되고, 확장 리스크는 전 구간 기준(스칼라 재산출 로직 미구현)이라 별도 안내 카드로 대체된다.
+- **성과 vs 벤치마크**: 누적 NAV(1/N·60:40·B&H 오버레이), Drawdown 곡선, 전략 비교표, 벤치마크 대비 초과수익(α) 시계열. 모두 국면 구간으로 필터·재산출.
+- **롤링·시즈널 분석**: Rolling Sharpe(252d)·Rolling Vol 이중축, 월별 수익률 히트맵. 국면 필터로 잘린 시계열로 재계산.
+- **거래·비용**: 일일 Turnover 바 + 누적 거래비용(초기 NAV 대비 %) 이중축. 국면 필터 적용.
+- **자산 분해**: 자산별 누적 P&L 기여도 스택 영역(국면 필터), 자산 상관계수 히트맵(전 구간), walk-forward Fold별 성과표(국면 매핑된 fold 한 줄로 필터).
+- **극단·수중 분석**: Underwater 지속기간 히스토그램, Best·Worst 10 거래일. 국면 필터 적용.
+- 모든 시계열은 `app/backtest/mock.ts`에서 결정론적으로 파생(seed 고정). `python -m src.backtest.export` 실행 시 `public/backtest.json`이 생성돼 자동으로 실데이터로 교체된다.
 
 ### `/models` — MLflow 대시(mock)
 
