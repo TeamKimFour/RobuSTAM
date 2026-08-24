@@ -1,5 +1,6 @@
 import TopNav from "../components/TopNav";
 import AlphaChart from "./AlphaChart";
+import AttributionCard from "./AttributionCard";
 import BenchmarkTable from "./BenchmarkTable";
 import BestWorstDaysCard from "./BestWorstDaysCard";
 import ContributionChart from "./ContributionChart";
@@ -24,6 +25,7 @@ import {
   TURNOVER_SERIES,
   alphaSeries,
   bestWorstDays,
+  computeAttribution,
   drawdownSeries,
   metricsFromPoints,
   monthlyReturns,
@@ -81,6 +83,7 @@ export default async function BacktestPage({ searchParams }: PageProps) {
     ...s,
     points: filterByRegime(s.points, regime),
   }));
+  const attribution = computeAttribution(regime.start, regime.end);
 
   return (
     <>
@@ -147,7 +150,10 @@ export default async function BacktestPage({ searchParams }: PageProps) {
         <TurnoverChart turnover={turnover} cumCost={cumCost} />
 
         <SectionLabel>자산 분해</SectionLabel>
-        <ContributionChart series={contribution} />
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
+          <ContributionChart series={contribution} />
+          <AttributionCard entries={attribution} regime={regime} />
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
           {regime.id === "all" ? (
             <CorrelationHeatmap matrix={CORRELATION_MATRIX} />

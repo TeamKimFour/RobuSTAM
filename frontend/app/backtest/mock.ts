@@ -39,6 +39,9 @@ const START = new Date("2020-01-01");
 const DAYS = 252 * 6;
 const STEP = 5;
 
+// STEP 상수를 외부에서도 참조 가능하게 export (attribution 계산 등에 사용).
+export const RESAMPLE_STEP = STEP;
+
 function mulberry32(seed: number) {
   let a = seed >>> 0;
   return () => {
@@ -500,6 +503,46 @@ export type FoldBenchmarkComparison = {
   foldId: number;
   entries: BenchmarkComparisonEntry[];
 };
+
+// ── 국면별 자산 기여도(attribution) — 8주차 attribution 해석 ─────────
+// 국면 구간에서 각 자산이 포트폴리오 수익에 얼마나 기여했는지 스칼라로 요약한다.
+// - contribution: 국면 동안 자산별 일별 기여도(비중×수익률) 합. 실제 % 값(0.05 = +5%p).
+// - avgWeight: 국면 동안 평균 비중(0~1).
+// - contribShare: 순 기여 총합에 대한 이 자산의 몫 (양/음 별도 정규화용).
+// 실 데이터가 없을 때 mock의 PORT.contribution·WEIGHT_SCHEDULE에서 도출한다.
+
+export type AttributionEntry = {
+  symbol: AssetSymbol;
+  color: string;
+  contribution: number;
+  avgWeight: number;
+};
+
+export function computeAttribution(
+  start?: string | null,
+  end?: string | null,
+): AttributionEntry[] {
+  // 국면 없으면 전 구간
+  const idx = DAILY_DATES
+    .map((d, i) => ({ d, i }))
+    .filter(({ d }) => (!start || d >= start) && (!end || d <= end))
+    .map(({ i }) => i);
+  if (idx.length === 0) {
+    return ASSET_ORDER.map((sym) => ({
+      symbol: sym, color: ASSET_COLOR[sym], contribution: 0, avgWeight: 0,
+    }));
+  }
+  return ASSET_ORDER.map((sym) => {
+    const contrib = idx.reduce((s, i) => s + PORT.contribution[sym][i], 0);
+    const wSum = idx.reduce((s, i) => s + WEIGHT_SCHEDULE[sym][i], 0);
+    return {
+      symbol: sym,
+      color: ASSET_COLOR[sym],
+      contribution: contrib,
+      avgWeight: wSum / idx.length,
+    };
+  });
+}
 
 export const COMPARISON_MOCK: FoldBenchmarkComparison[] = [
   {
