@@ -233,6 +233,20 @@ export const BACKTEST_METRICS: BacktestMetrics = {
   vol: volFromPoints(RL.points),
 };
 
+/**
+ * 임의의 NAV 시계열에서 KPI 4종을 재산출한다. 국면 필터로 잘린 구간에서도 지표를
+ * 다시 뽑기 위해 공개한다. 표본이 부족(<2)하면 0으로 채워 UI가 깨지지 않게 한다.
+ */
+export function metricsFromPoints(points: SeriesPoint[]): BacktestMetrics {
+  if (points.length < 2) return { cagr: 0, sharpe: 0, mdd: 0, vol: 0 };
+  return {
+    cagr: cagrFromPoints(points),
+    sharpe: sharpeFromPoints(points),
+    mdd: drawdownFromPoints(points),
+    vol: volFromPoints(points),
+  };
+}
+
 export const BENCHMARK_TABLE: BenchmarkRow[] = BACKTEST_SERIES.map((s) => ({
   name: s.name,
   cagr: cagrFromPoints(s.points),
@@ -341,8 +355,15 @@ export const FOLD_TABLE: FoldRow[] = [
 ];
 
 // ── Best / Worst 거래일 (일간 수익률 상위/하위) ──
-export function bestWorstDays(n: number): { best: DayReturn[]; worst: DayReturn[] } {
-  const withDate: DayReturn[] = PORT.dailyRet.map((r, i) => ({ date: DAILY_DATES[i], ret: r }));
+// start/end(YYYY-MM-DD)를 넘기면 그 구간으로 한정한다 (국면 필터). 생략 시 전 구간.
+export function bestWorstDays(
+  n: number,
+  start?: string | null,
+  end?: string | null,
+): { best: DayReturn[]; worst: DayReturn[] } {
+  const withDate: DayReturn[] = PORT.dailyRet
+    .map((r, i) => ({ date: DAILY_DATES[i], ret: r }))
+    .filter((d) => (!start || d.date >= start) && (!end || d.date <= end));
   const sorted = [...withDate].sort((a, b) => b.ret - a.ret);
   return { best: sorted.slice(0, n), worst: sorted.slice(-n).reverse() };
 }
