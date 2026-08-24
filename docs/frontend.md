@@ -42,7 +42,7 @@ Vercel 배포 대상 대시보드. Plotly.js로 자산 비중·성과곡선을 �
 - **국면별 RL vs 벤치마크 판정** *(신규, 8주차 발표 하이라이트)*: fold(=국면)별로 RL이 1/N·60:40·B&H 각각에 대해 CLAUDE.md §1 기준(샤프 +15% 개선 또는 MDD 20% 방어)을 만족했는지 카드로 노출. 스위처가 `전 구간`이면 3장 그리드, 특정 국면이면 그 fold 한 장을 확대. 데이터 소스는 `backtest.json`의 `comparison[].vs_benchmark`(runner._compare_to_benchmarks 원본).
 - **롤링·시즈널 분석**: Rolling Sharpe(252d)·Rolling Vol 이중축, 월별 수익률 히트맵. 국면 필터로 잘린 시계열로 재계산.
 - **거래·비용**: 일일 Turnover 바 + 누적 거래비용(초기 NAV 대비 %) 이중축. 국면 필터 적용.
-- **자산 분해**: 자산별 누적 P&L 기여도 스택 영역(국면 필터), 자산 상관계수 히트맵(전 구간), walk-forward Fold별 성과표(국면 매핑된 fold 한 줄로 필터).
+- **자산 분해**: 자산별 누적 P&L 기여도 스택 영역(국면 필터) + **자산별 attribution 카드**(신규, 8주차) — 국면 구간에서 각 자산 순 기여(pp)·평균 비중·중앙 정렬 막대 요약. `computeAttribution(start, end)`가 mock의 `PORT.contribution`·`WEIGHT_SCHEDULE`로 계산. 실 데이터는 후속 export 확장. 자산 상관계수 히트맵(전 구간), walk-forward Fold별 성과표(국면 매핑된 fold 한 줄로 필터).
 - **극단·수중 분석**: Underwater 지속기간 히스토그램, Best·Worst 10 거래일. 국면 필터 적용.
 - 모든 시계열은 `app/backtest/mock.ts`에서 결정론적으로 파생(seed 고정). `python -m src.backtest.export` 실행 시 `public/backtest.json`이 생성돼 자동으로 실데이터로 교체된다.
 
