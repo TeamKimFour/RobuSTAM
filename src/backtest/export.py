@@ -193,7 +193,14 @@ def _build_combo_snapshot(
     per_fold_metrics: list[dict[str, Any]] = []
     per_fold_period: list[tuple[str, str]] = []
     for fold_id in fold_ids:
-        result = run_fold_fn(fold_id, model, config_path, "test", initial_nav=initial_nav)
+        # combo 인자를 반드시 넘긴다 — runner.run_fold(combo=None)이면 config.active_combo
+        # (기본 'full')로 fallback해 모든 콤보가 187차원 Feature Store만 읽는 버그가 난다.
+        # 이 버그는 PR #72 리뷰(도현)에서 잡혔다: 콤보별로 다른 policy를 각자의 Feature Store로
+        # 평가한다는 이 함수의 목적 자체가 combo 전달 없이는 성립하지 않는다.
+        result = run_fold_fn(
+            fold_id, model, config_path, "test",
+            initial_nav=initial_nav, combo=combo,
+        )
         rl_nav_df = result["nav_by_strategy"]["RL policy"]
         per_fold_points.append(_nav_to_points(rl_nav_df, initial_nav))
         per_fold_metrics.append(result["strategies"]["RL policy"])
