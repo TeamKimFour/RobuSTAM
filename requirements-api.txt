@@ -3,3 +3,4 @@ uvicorn==0.51.0
 pydantic==2.13.4
 pyyaml==6.0.3
 boto3==1.43.44
+mlflow-skinny==3.14.0
