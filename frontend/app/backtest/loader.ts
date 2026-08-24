@@ -16,9 +16,11 @@ import {
   BACKTEST_METRICS,
   BACKTEST_SERIES,
   BENCHMARK_TABLE,
+  COMPARISON_MOCK,
   FOLD_TABLE,
   type BacktestMetrics,
   type BenchmarkRow,
+  type FoldBenchmarkComparison,
   type FoldRow,
   type Series,
 } from "./mock";
@@ -46,13 +48,24 @@ type ExportStrategy = {
   };
 };
 
+type ExportComparisonEntry = {
+  sharpe_improvement_pct: number;
+  mdd_defense_pct: number;
+  beats_target: boolean;
+};
+
+type ExportComparison = {
+  fold_id: number;
+  vs_benchmark: Record<string, ExportComparisonEntry>;
+};
+
 type ExportBundle = {
   generated_at: string;
   initial_nav: number;
   periods: { fold_id: number; start: string; end: string }[];
   strategies: ExportStrategy[];
   fold_table: { fold_id: number; period: string; sharpe: number; cagr: number; mdd: number }[];
-  comparison?: unknown;
+  comparison?: ExportComparison[];
 };
 
 export type BacktestSnapshot = {
@@ -62,6 +75,12 @@ export type BacktestSnapshot = {
   metrics: BacktestMetrics;
   benchmarkTable: BenchmarkRow[];
   foldTable: FoldRow[];
+  /**
+   * fold별 RL policy vs 벤치마크 3종 성과 비교. `runner._compare_to_benchmarks`가
+   * 계산한 CLAUDE.md §1 판정(샤프 15%+ 개선 또는 MDD 20%+ 방어)을 그대로 담는다.
+   * 실 데이터가 없거나 comparison 필드가 비면 mock으로 fallback (COMPARISON_MOCK).
+   */
+  comparison: FoldBenchmarkComparison[];
 };
 
 const EXPORT_RELATIVE_PATH = "public/backtest.json";
@@ -117,6 +136,21 @@ function metricsFromPolicy(strategies: ExportStrategy[]): BacktestMetrics {
   };
 }
 
+function toComparison(
+  raw: ExportComparison[] | undefined,
+): FoldBenchmarkComparison[] {
+  if (!raw || raw.length === 0) return COMPARISON_MOCK;
+  return raw.map((r) => ({
+    foldId: r.fold_id,
+    entries: Object.entries(r.vs_benchmark).map(([benchmark, v]) => ({
+      benchmark: DISPLAY_NAME[benchmark] ?? benchmark,
+      sharpeImprovementPct: v.sharpe_improvement_pct,
+      mddDefensePct: v.mdd_defense_pct,
+      beatsTarget: v.beats_target,
+    })),
+  }));
+}
+
 /** 실데이터 우선 로더. 없으면 mock으로 fallback한다. */
 export async function loadBacktestSnapshot(): Promise<BacktestSnapshot> {
   const bundle = await readExport();
@@ -128,6 +162,7 @@ export async function loadBacktestSnapshot(): Promise<BacktestSnapshot> {
       metrics: BACKTEST_METRICS,
       benchmarkTable: BENCHMARK_TABLE,
       foldTable: FOLD_TABLE,
+      comparison: COMPARISON_MOCK,
     };
   }
   return {
@@ -137,5 +172,6 @@ export async function loadBacktestSnapshot(): Promise<BacktestSnapshot> {
     metrics: metricsFromPolicy(bundle.strategies),
     benchmarkTable: toBenchmarkTable(bundle.strategies),
     foldTable: toFoldTable(bundle.fold_table),
+    comparison: toComparison(bundle.comparison),
   };
 }

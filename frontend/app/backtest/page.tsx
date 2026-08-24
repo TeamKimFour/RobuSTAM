@@ -10,6 +10,7 @@ import { loadBacktestSnapshot } from "./loader";
 import MetricsRow from "./MetricsRow";
 import MonthlyReturnsHeatmap from "./MonthlyReturnsHeatmap";
 import PerformanceChart from "./PerformanceChart";
+import RegimeBenchmarkCard from "./RegimeBenchmarkCard";
 import RegimeSwitcher from "./RegimeSwitcher";
 import { filterByRegime, resolveRegime, type Regime } from "./regime";
 import RollingMetricsChart from "./RollingMetricsChart";
@@ -132,6 +133,9 @@ export default async function BacktestPage({ searchParams }: PageProps) {
         </div>
 
         <AlphaChart title={`벤치마크 대비 초과수익 (vs ${bench6040.name})`} alpha={alpha} />
+
+        <SectionLabel>국면별 RL vs 벤치마크 판정</SectionLabel>
+        <RegimeBenchmarkCard comparison={snapshot.comparison} regime={regime} />
 
         <SectionLabel>롤링·시즈널 분석</SectionLabel>
         <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 20 }}>

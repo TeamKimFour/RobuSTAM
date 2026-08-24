@@ -477,3 +477,53 @@ export const RECENT_RETURNS_30D: Record<AssetSymbol, number[]> = ASSET_ORDER.red
 }, {} as Record<AssetSymbol, number[]>);
 
 export const RECENT_RETURNS_DATES: string[] = DAILY_DATES.slice(-30);
+
+// ── 국면(=fold)별 RL vs 벤치마크 비교 (8주차 발표 하이라이트) ───────
+// backtest.json 계약(`comparison[].vs_benchmark`)의 FE 소비 형태.
+// CLAUDE.md §1 판정: 샤프 15%+ 개선 또는 MDD 20%+ 방어면 beatsTarget=true.
+// mock 값은 노션 국면 매핑(Fold 1=COVID / 2=고금리 / 3=최근)에 실감을 준 것 —
+// 도현·찬휘 실 산출물이 오면 export.py가 이 값을 덮어쓴다.
+//
+// 각 국면 시나리오:
+//   Fold 1(COVID): 폭락 방어에서 RL이 60:40 대비 강함, 1/N도 이김, B&H는 못 이김
+//   Fold 2(고금리): 채권 급락으로 60:40 무너져 RL이 크게 이김, 1/N은 근소, B&H는 소폭 이김
+//   Fold 3(최근):  SPY 랠리에서 B&H가 강해 RL이 소폭 밀림, 60:40은 이김, 1/N 근소
+
+export type BenchmarkComparisonEntry = {
+  benchmark: string;              // FE 표시명 (loader.ts DISPLAY_NAME 매핑 후)
+  sharpeImprovementPct: number;   // (RL_sharpe - bench_sharpe) / |bench_sharpe|
+  mddDefensePct: number;          // (|bench_mdd| - |RL_mdd|) / |bench_mdd|
+  beatsTarget: boolean;
+};
+
+export type FoldBenchmarkComparison = {
+  foldId: number;
+  entries: BenchmarkComparisonEntry[];
+};
+
+export const COMPARISON_MOCK: FoldBenchmarkComparison[] = [
+  {
+    foldId: 1,
+    entries: [
+      { benchmark: "1/N Equal Weight", sharpeImprovementPct: 0.28, mddDefensePct: 0.18, beatsTarget: true },
+      { benchmark: "60:40 (SPY/TLT)",  sharpeImprovementPct: 0.34, mddDefensePct: 0.22, beatsTarget: true },
+      { benchmark: "Buy & Hold (equal)", sharpeImprovementPct: -0.08, mddDefensePct: 0.31, beatsTarget: true },
+    ],
+  },
+  {
+    foldId: 2,
+    entries: [
+      { benchmark: "1/N Equal Weight", sharpeImprovementPct: 0.14, mddDefensePct: 0.11, beatsTarget: false },
+      { benchmark: "60:40 (SPY/TLT)",  sharpeImprovementPct: 0.62, mddDefensePct: 0.38, beatsTarget: true },
+      { benchmark: "Buy & Hold (equal)", sharpeImprovementPct: 0.09, mddDefensePct: 0.24, beatsTarget: true },
+    ],
+  },
+  {
+    foldId: 3,
+    entries: [
+      { benchmark: "1/N Equal Weight", sharpeImprovementPct: 0.02, mddDefensePct: 0.06, beatsTarget: false },
+      { benchmark: "60:40 (SPY/TLT)",  sharpeImprovementPct: 0.19, mddDefensePct: 0.12, beatsTarget: true },
+      { benchmark: "Buy & Hold (equal)", sharpeImprovementPct: -0.15, mddDefensePct: 0.04, beatsTarget: false },
+    ],
+  },
+];
