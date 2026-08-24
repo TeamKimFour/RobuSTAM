@@ -39,6 +39,7 @@ Vercel 배포 대상 대시보드. Plotly.js로 자산 비중·성과곡선을 �
 - **국면 격자 스위처(상단)**: `전 구간 · COVID · 고금리 · 최근` 4단 세그먼트 컨트롤. URL 쿼리(`?regime=fold1` 등)로 상태를 관리해 SSR·공유 URL과 자연스럽게 맞물린다. fold ↔ 국면 매핑은 `docs/data_pipeline.md §4-1`(Fold 1=2020–2021 COVID / Fold 2=2022–2023 고금리 / Fold 3=2024–2025 최근)이 SSOT이며, `app/backtest/regime.ts`에 이관되어 있다. 민지 별도 국면 라벨 데이터셋이 붙기 전까지는 fold 단위가 사실상 국면 격자다.
 - **핵심 지표**: KPI(CAGR/Sharpe/MDD/Vol) + 확장 리스크(Sortino, Calmar, VaR/CVaR 95%, Skew, Kurtosis, Beta, Hit Ratio, Best/Worst day). 국면 필터 적용 시 KPI 4종은 국면 구간에서 재산출되고, 확장 리스크는 전 구간 기준(스칼라 재산출 로직 미구현)이라 별도 안내 카드로 대체된다.
 - **성과 vs 벤치마크**: 누적 NAV(1/N·60:40·B&H 오버레이), Drawdown 곡선, 전략 비교표, 벤치마크 대비 초과수익(α) 시계열. 모두 국면 구간으로 필터·재산출.
+- **국면별 RL vs 벤치마크 판정** *(신규, 8주차 발표 하이라이트)*: fold(=국면)별로 RL이 1/N·60:40·B&H 각각에 대해 CLAUDE.md §1 기준(샤프 +15% 개선 또는 MDD 20% 방어)을 만족했는지 카드로 노출. 스위처가 `전 구간`이면 3장 그리드, 특정 국면이면 그 fold 한 장을 확대. 데이터 소스는 `backtest.json`의 `comparison[].vs_benchmark`(runner._compare_to_benchmarks 원본).
 - **롤링·시즈널 분석**: Rolling Sharpe(252d)·Rolling Vol 이중축, 월별 수익률 히트맵. 국면 필터로 잘린 시계열로 재계산.
 - **거래·비용**: 일일 Turnover 바 + 누적 거래비용(초기 NAV 대비 %) 이중축. 국면 필터 적용.
 - **자산 분해**: 자산별 누적 P&L 기여도 스택 영역(국면 필터), 자산 상관계수 히트맵(전 구간), walk-forward Fold별 성과표(국면 매핑된 fold 한 줄로 필터).
