@@ -123,7 +123,12 @@ model:
   # 0.0 = 페널티 없음(기본). λ와 마찬가지로 학습 전용이라 평가·백테스트는 κ=0으로 측정 축을 유지한다.
   vol_penalty_coef: 0.0
   vol_penalty_window: 20                # σ_recent 롤링 윈도우 길이(스텝). 2 이상.
-  mlflow_tracking_uri: "mlruns"        # 로컬 파일 스토어 (CLAUDE.md 스택: MLflow)
+  # 팀 공용 트래킹 서버 — 각자 로컬에서 `docker compose up -d mlflow`로 띄우면
+  # 컨테이너가 팀 공용 Postgres(.env의 DATABASE_URL)에 붙으므로, 네 명이 같은
+  # experiment·run을 보고 동시에 기록할 수 있다(README "MLflow 트래킹 서버" 참고).
+  # 서버를 안 띄운 상태로 학습하면 연결 실패로 즉시 에러가 난다 — 그 경우
+  # `make mlflow-up` 하거나, 팀 DB 없이 혼자 돌릴 때만 "mlruns"로 되돌린다.
+  mlflow_tracking_uri: "http://localhost:5000"
   mlflow_experiment: "robustam-ppo"
   # 피처 콤보 스크리닝(src/data/screen_combos.py) 전용 experiment — RL 학습 run과 섞이면
   # MLflow UI에서 구분이 안 되고 향후 다른 지표로 조회할 때 걸릴 수 있어 분리한다(PR #69 리뷰).

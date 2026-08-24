@@ -31,8 +31,10 @@ ENV_FILE    ?= .env
 CONFIG      ?= config/config.yaml
 MLFLOW_PORT ?= 5000
 
-# M0|M1|M2|M3 — 생략 시 config의 active_combo를 따른다.
+# M0|M1|M2|M3 — 생략 시 config의 active_combo를 따른다(단일 콤보용).
 FEATURE_SET ?=
+# experiment 전용 — 여러 콤보를 공백으로: COMBOS="full M0 M1". 생략 시 러너 기본값.
+COMBOS      ?=
 # 생략 시 config.split의 전체 fold 순회.
 FOLD        ?=
 SEED        ?= 42
@@ -59,8 +61,8 @@ BT_TESTS    := tests/test_engine.py tests/test_benchmark.py tests/test_runner.py
                tests/test_s3_results.py
 
 .PHONY: help mlflow-build mlflow-up mlflow-down mlflow-logs mlflow-health mlflow-smoke \
-        build-features screen train backtest test test-data test-model test-backtest \
-        require-env require-combo require-screen-combos reject-feature-set
+        build-features screen train backtest experiment test test-data test-model test-backtest \
+        require-env require-combo require-screen-combos
 
 # ─────────────────────────── help ───────────────────────────
 
@@ -71,13 +73,14 @@ help: ## 이 도움말 출력
 	  | sort \
 	  | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 	@echo ""
-	@echo "변수: FEATURE_SET(M0~M3) FOLD SEED TIMESTEPS SPLIT CONFIG PYTHON ENV_FILE MLFLOW_PORT"
+	@echo "변수: FEATURE_SET(M0~M3) COMBOS FOLD SEED TIMESTEPS SPLIT CONFIG PYTHON ENV_FILE MLFLOW_PORT"
 	@echo "예시: make build-features FEATURE_SET=M1"
-	@echo "      make train FOLD=1 SEED=42 TIMESTEPS=200000"
-	@echo "      make backtest FOLD=1 SPLIT=test"
+	@echo "      make train FEATURE_SET=M1 FOLD=1 SEED=42 TIMESTEPS=200000"
+	@echo "      make backtest FEATURE_SET=M1 FOLD=1 SPLIT=test"
+	@echo "      make experiment COMBOS=\"full M0 M1 M2 M3\" TIMESTEPS=200000"
 	@echo ""
-	@echo "주의: FEATURE_SET은 아직 build-features에만 연결돼 있다."
-	@echo "      train·backtest는 config의 active_combo를 따른다(6주차 2순위 작업 대상)."
+	@echo "주의: train·backtest·experiment는 MLflow 서버가 떠 있어야 한다(make mlflow-up)."
+	@echo "      config.model.mlflow_tracking_uri가 팀 공용 서버를 가리키기 때문이다."
 
 # ─────────────────────────── 가드 ───────────────────────────
 
@@ -104,14 +107,9 @@ sys.exit(0 if importlib.util.find_spec('src.data.screen_combos') else 1)" || { \
 
 # train.py·runner.py는 아직 콤보를 소비하지 않는다(6주차 도현 2순위).
 # FEATURE_SET을 조용히 무시하고 full로 학습하면 실험이 오염되므로 명시적으로 실패시킨다.
-reject-feature-set:
-	@if [ -n "$(FEATURE_SET)" ]; then \
-	  echo "ERROR: FEATURE_SET=$(FEATURE_SET) 은 아직 train/backtest에 연결되지 않았습니다."; \
-	  echo "       현재 학습·백테스트는 config의 active_combo만 소비합니다."; \
-	  echo "       콤보를 바꾸려면 $(CONFIG)의 active_combo를 수정하거나,"; \
-	  echo "       실험 러너 연결(6주차 2순위) 완료를 기다리세요."; \
-	  exit 1; \
-	fi
+# train·backtest가 콤보를 소비하게 된 뒤로는(6주차 2순위 완료) FEATURE_SET을 그대로
+# --combo로 넘긴다. 생략하면 config의 active_combo를 따른다.
+COMBO_ARG = $(if $(strip $(FEATURE_SET)),--combo $(FEATURE_SET),)
 
 # ────────────────────────── MLflow ──────────────────────────
 
@@ -158,14 +156,20 @@ screen: require-screen-combos ## 콤보 스크리닝 + MLflow 기록 (Baseline·
 
 # ──────────────────── 학습 · 백테스트 ────────────────────
 
-train: reject-feature-set ## PPO 학습 (FOLD·SEED·TIMESTEPS)
-	$(PYTHON) -m src.models.train --config $(CONFIG) --seed $(SEED) \
+train: ## PPO 학습 (FEATURE_SET·FOLD·SEED·TIMESTEPS)
+	$(PYTHON) -m src.models.train --config $(CONFIG) --seed $(SEED) $(COMBO_ARG) \
 	  $(if $(strip $(FOLD)),--fold-id $(FOLD),) \
 	  $(if $(strip $(TIMESTEPS)),--total-timesteps $(TIMESTEPS),)
 
-backtest: reject-feature-set ## 백테스트 (policy vs 1/N·60:40·B&H, FOLD·SPLIT)
-	$(PYTHON) -m src.backtest.runner --config $(CONFIG) --split $(SPLIT) \
+backtest: ## 백테스트 (policy vs 1/N·60:40·B&H, FEATURE_SET·FOLD·SPLIT)
+	$(PYTHON) -m src.backtest.runner --config $(CONFIG) --split $(SPLIT) $(COMBO_ARG) \
 	  $(if $(strip $(FOLD)),--fold-id $(FOLD),)
+
+experiment: ## 콤보 실험 러너 — 학습→백테스트→3지표 판정 (COMBOS·FOLD·SEED·TIMESTEPS)
+	$(PYTHON) -m src.models.experiment --config $(CONFIG) --seed $(SEED) \
+	  $(if $(strip $(COMBOS)),--combos $(COMBOS),) \
+	  $(if $(strip $(FOLD)),--folds $(FOLD),) \
+	  $(if $(strip $(TIMESTEPS)),--timesteps $(TIMESTEPS),)
 
 # ────────────────────────── 테스트 ──────────────────────────
 

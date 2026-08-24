@@ -33,7 +33,7 @@ Vercel 배포 대상 대시보드. Plotly.js로 자산 비중·성과곡선을 �
 - 3상태 표시: 로딩 스켈레톤 / 오류 카드(네트워크·503·기타 HTTP) / 정상.
 - 아직 API로 나오지 않는 카드(전일 변동성·특징 벡터·이력)는 `DemoBadge`로 명시.
 
-### `/backtest` — API 미연결(시연용)
+### `/backtest` — 실데이터 우선, 없으면 mock
 
 섹션 구성:
 - **핵심 지표**: KPI(CAGR/Sharpe/MDD/Vol) + 확장 리스크(Sortino, Calmar, VaR/CVaR 95%, Skew, Kurtosis, Beta, Hit Ratio, Best/Worst day).
@@ -42,8 +42,11 @@ Vercel 배포 대상 대시보드. Plotly.js로 자산 비중·성과곡선을 �
 - **거래·비용**: 일일 Turnover 바 + 누적 거래비용(초기 NAV 대비 %) 이중축.
 - **자산 분해**: 자산별 누적 P&L 기여도 스택 영역, 자산 상관계수 히트맵, walk-forward Fold별 성과표.
 - **극단·수중 분석**: Underwater 지속기간 히스토그램, Best·Worst 10 거래일.
-- 모든 시계열은 `app/backtest/mock.ts`에서 결정론적으로 파생(seed 고정, 자산 5종의 일별 mock 수익률과 mock 비중 스케줄로부터 NAV/turnover/기여도 등이 일관되게 계산됨).
-- 백엔드 백테스트 결과 조회 엔드포인트 확정 시 `mock.ts` → API fetch로 교체.
+- **피처 콤보 비교 (M0~M3 · full)** *(신규, 3순위)*: 콤보별 성과 표(Sharpe/CAGR/MDD/Vol/회전율/거래비용, Sharpe 최고 강조), 콤보 5종 누적 NAV 오버레이 차트, Fold × 콤보 매트릭스(Sharpe·MDD 2종), 자산 비중 스택 영역(시간축 국면 이동 시각화).
+  - 실데이터 소스: `python -m src.backtest.export --combo full=runs/full.zip --combo M0=runs/m0.zip …` 로 생성된 `backtest.json`의 `combos` 필드. 미탑재(구 산출물 또는 도현 M0~M3 학습 전)이면 `mock.ts::COMBOS_MOCK`으로 조용히 폴백.
+  - 콤보 파라미터의 SSOT는 백엔드 `src.backtest.export.COMBO_ORDER/COLOR/DISPLAY` — FE `mock.ts::COMBO_PARAMS`가 색·표시명을 그와 동기화한다.
+- **데이터 소스 배지**: 상단 우측에 실데이터/mock 여부·생성 시각 표시.
+- 시연용 mock은 `app/backtest/mock.ts`에서 결정론적으로 파생(seed 고정). `python -m src.backtest.export` 실행 시 `public/backtest.json`이 생성돼 자동으로 실데이터로 교체된다.
 
 ### `/models` — MLflow 대시(mock)
 

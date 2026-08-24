@@ -456,3 +456,138 @@ export const RECENT_RETURNS_30D: Record<AssetSymbol, number[]> = ASSET_ORDER.red
 }, {} as Record<AssetSymbol, number[]>);
 
 export const RECENT_RETURNS_DATES: string[] = DAILY_DATES.slice(-30);
+
+// ── 콤보(full/M0/M1/M2/M3) mock — 3순위 실험 결과 시각화 ─────────────────────
+// 도현이 실제 M0~M3 학습 산출물을 export.py --combo로 넘길 때까지 임시로 쓸 데이터.
+// docs/state_spec.md §2 v1.2 표의 D 값과 색상은 src/backtest/export.py COMBO_COLOR와 일치.
+
+export type ComboFoldRow = {
+  fold: string;
+  period: string;
+  sharpe: number;
+  cagr: number;
+  mdd: number;
+  avgTurnover: number;
+  totalCost: number;
+};
+
+export type ComboSnapshot = {
+  combo: string;
+  displayName: string;
+  color: string;
+  points: SeriesPoint[];      // fold 이어붙인 정규화 NAV
+  metrics: {
+    cagr: number;
+    sharpe: number;
+    mdd: number;
+    vol: number;
+    total_return: number;
+    avg_turnover: number;
+    total_cost: number;
+  };
+  foldTable: ComboFoldRow[];
+};
+
+type ComboParams = {
+  combo: string;
+  displayName: string;
+  color: string;
+  seed: number;
+  driftAnnual: number;
+  volAnnual: number;
+  avgTurnover: number;
+  totalCost: number;
+};
+
+// 콤보별 mock 성과 파라미터. full은 기본 정책(=상단 RL 곡선과 유사), M0~M3는
+// docs/feature_candidates.md 스크리닝 순위(M0>M1>full>M2>M3)를 대략 반영해 심었다.
+// 실제 값과 다를 수 있고, 실데이터가 오면 export.py가 이를 덮어씀.
+const COMBO_PARAMS: ComboParams[] = [
+  { combo: "full", displayName: "Full (D=187, 6+2)", color: "#8b5cf6",
+    seed: 411, driftAnnual: 0.08, volAnnual: 0.14, avgTurnover: 0.78, totalCost: 12800 },
+  { combo: "M0",   displayName: "M0 (D=156, 0+1)",   color: "#f59e0b",
+    seed: 421, driftAnnual: 0.11, volAnnual: 0.12, avgTurnover: 0.42, totalCost: 6900 },
+  { combo: "M1",   displayName: "M1 (D=166, 2+1)",   color: "#22d3ee",
+    seed: 431, driftAnnual: 0.09, volAnnual: 0.13, avgTurnover: 0.55, totalCost: 9100 },
+  { combo: "M2",   displayName: "M2 (D=171, 3+1)",   color: "#10b981",
+    seed: 441, driftAnnual: 0.075, volAnnual: 0.15, avgTurnover: 0.66, totalCost: 10800 },
+  { combo: "M3",   displayName: "M3 (D=172, 3+2)",   color: "#f472b6",
+    seed: 451, driftAnnual: 0.06, volAnnual: 0.17, avgTurnover: 0.81, totalCost: 13400 },
+];
+
+const FOLD_BOUNDARIES = [
+  { fold: "Fold 1", period: "2020-01 ~ 2021-12" },
+  { fold: "Fold 2", period: "2022-01 ~ 2023-12" },
+  { fold: "Fold 3", period: "2024-01 ~ 2025-12" },
+];
+
+function buildComboSeries(params: ComboParams): SeriesPoint[] {
+  const rand = mulberry32(params.seed);
+  const dailyDrift = params.driftAnnual / 252;
+  const dailyVol = params.volAnnual / Math.sqrt(252);
+  const pts: SeriesPoint[] = [];
+  let nav = 1;
+  for (let i = 0; i < DAYS; i += 1) {
+    nav *= 1 + dailyDrift + dailyVol * gauss(rand);
+    if (i % STEP === 0) pts.push({ date: DAILY_DATES[i], value: nav });
+  }
+  return pts;
+}
+
+function foldRowsFromPoints(pts: SeriesPoint[], avgTurnover: number, totalCost: number): ComboFoldRow[] {
+  // 시계열을 세 fold로 3등분. 각 fold의 시작·끝만 확인해 Sharpe/CAGR/MDD 근사.
+  const size = Math.floor(pts.length / 3);
+  return FOLD_BOUNDARIES.map((b, i) => {
+    const slice = pts.slice(i * size, i === 2 ? pts.length : (i + 1) * size);
+    return {
+      fold: b.fold,
+      period: b.period,
+      sharpe: sharpeFromPoints(slice),
+      cagr: cagrFromPoints(slice),
+      mdd: drawdownFromPoints(slice),
+      avgTurnover,
+      totalCost: totalCost / 3,
+    };
+  });
+}
+
+function buildComboSnapshot(params: ComboParams): ComboSnapshot {
+  const pts = buildComboSeries(params);
+  const rets = pointReturns(pts);
+  const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+  const totalReturn = pts[pts.length - 1].value / pts[0].value - 1;
+  return {
+    combo: params.combo,
+    displayName: params.displayName,
+    color: params.color,
+    points: pts,
+    metrics: {
+      cagr: cagrFromPoints(pts),
+      sharpe: sharpeFromPoints(pts),
+      mdd: drawdownFromPoints(pts),
+      vol: volFromPoints(pts),
+      total_return: totalReturn,
+      avg_turnover: params.avgTurnover,
+      total_cost: params.totalCost,
+    },
+    foldTable: foldRowsFromPoints(pts, params.avgTurnover, params.totalCost),
+  };
+}
+
+export const COMBOS_MOCK: ComboSnapshot[] = COMBO_PARAMS.map(buildComboSnapshot);
+
+// ── 자산 비중 시계열 (스택 영역 차트용) ──
+// 활성 콤보의 WEIGHT_SCHEDULE을 STEP 샘플링해서 노출. 실 데이터는 후속 export 확장.
+
+export type WeightPoint = { date: string } & Record<AssetSymbol, number>;
+
+export const ALLOCATION_TIMESERIES: WeightPoint[] = DAILY_DATES.filter((_, i) => i % STEP === 0).map(
+  (date, k) => {
+    const i = k * STEP;
+    const row = { date } as WeightPoint;
+    for (const sym of ASSET_ORDER) {
+      row[sym] = WEIGHT_SCHEDULE[sym][i];
+    }
+    return row;
+  },
+);

@@ -32,7 +32,15 @@ import pandas as pd
 
 from src.backtest.benchmark import sixty_forty_target
 from src.backtest.engine import BacktestEngine
-from src.config_loader import DEFAULT_CONFIG_PATH, get_assets, get_window, load_config
+from src.config_loader import (
+    DEFAULT_CONFIG_PATH,
+    get_asset_features,
+    get_assets,
+    get_market_features,
+    get_window,
+    load_config,
+    resolve_paths_for_combo,
+)
 from src.data import schema
 
 
@@ -61,17 +69,20 @@ def run_policy(
     config_path: str = DEFAULT_CONFIG_PATH,
     *,
     deterministic: bool = True,
+    combo: str | None = None,
 ) -> pd.DataFrame:
     """학습된 policy의 NAV 곡선을 만든다 (벤치마크 함수들과 동일한 출력 포맷).
 
     Parameters
     ----------
     price_returns : 단순수익률 (`targets_to_price_returns` 출력). 컬럼 = 자산명.
-    state_df : 정규화된 187차원 State (`feature_store.load_features` 출력).
+    state_df : 정규화된 State (`feature_store.load_features` 출력). 차원은 콤보에 따라
+        달라진다(full=187, M1=166 등) — `combo`로 어느 콤보인지 알려줘야 한다.
         `price_returns`와 index가 정렬돼 있어야 한다(교집합만 사용).
     model : `predict(obs, deterministic=...) -> (action, _)` 인터페이스(SB3 정책).
     engine : 거래비용·초기 NAV를 쥔 백테스트 엔진.
     deterministic : 백테스트는 재현성을 위해 결정적 행동을 기본으로 한다.
+    combo : 피처 콤보(M0~M3). 생략 시 config의 `active_combo`.
 
     Returns
     -------
@@ -79,20 +90,29 @@ def run_policy(
     """
     from src.env.portfolio_env import _softmax  # 학습 step()·precompute와 동일 softmax
 
-    cfg = load_config(config_path)
+    cfg = resolve_paths_for_combo(load_config(config_path), combo)
     assets = get_assets(cfg)
     W = get_window(cfg)
+    # 지표 개수는 콤보마다 다르고, prev_weight 블록의 **시작 위치**가 여기에 달려 있다.
+    # 카논(6+2) 기본값으로 슬라이스를 잡으면 M1(2+1) 등에서 엉뚱한 칸에 직전 비중을 써넣어
+    # 정책이 조용히 잘못된 관측을 보게 된다 — 반드시 콤보의 실제 개수를 넘긴다.
+    n_asset_feats = len(get_asset_features(cfg))
+    n_market_feats = len(get_market_features(cfg))
 
     if list(price_returns.columns) != list(assets):
         raise ValueError(
             f"price_returns 컬럼이 자산 순서와 다릅니다. 기대: {assets}, "
             f"실제: {list(price_returns.columns)}"
         )
-    expected_cols = schema.feature_names(W)
+    expected_cols = schema.feature_names(
+        W, get_asset_features(cfg), get_market_features(cfg)
+    )
     if list(state_df.columns) != expected_cols:
         raise ValueError(
-            "state_df 컬럼이 schema.feature_names(W)와 일치하지 않습니다 "
-            "(feature_store.load_features 출력을 사용하세요)."
+            f"state_df 컬럼이 콤보 '{combo or cfg.get('active_combo')}'의 "
+            f"schema.feature_names(W)와 일치하지 않습니다(기대 {len(expected_cols)}칸, "
+            f"실제 {len(state_df.columns)}칸). feature_store.load_features 출력을 "
+            "사용하고, combo 인자가 그 Feature Store와 같은지 확인하세요."
         )
 
     # targets는 익일 수익률이 없는 마지막 행이 빠져 있어 State보다 짧을 수 있다 → 교집합.
@@ -102,7 +122,7 @@ def run_policy(
     state_df = state_df.loc[idx]
     price_returns = price_returns.loc[idx]
 
-    prev_slice = schema.prev_weight_slice(W)
+    prev_slice = schema.prev_weight_slice(W, n_asset_feats, n_market_feats)
     weights = np.zeros(len(assets), dtype=np.float64)
     weights[assets.index("SHV")] = 1.0  # 콜드스타트 = 현금 100% (env.reset과 동일)
     nav = engine.initial_nav
@@ -140,14 +160,16 @@ def run_policy_on_fold(
     engine: BacktestEngine | None = None,
     *,
     deterministic: bool = True,
+    combo: str | None = None,
 ) -> pd.DataFrame:
     """Feature Store의 fold/split을 읽어 policy를 굴린다(편의 진입점).
 
     정식 성과검증은 **test split**에서 한다 — train/valid는 학습·모델선택에 이미 쓰였다.
+    `combo`를 주면 그 콤보의 Feature Store(`data/feature_store/<combo>/`)를 읽는다.
     """
     from src.data import feature_store as fs
 
-    cfg = load_config(config_path)
+    cfg = resolve_paths_for_combo(load_config(config_path), combo)
     assets = get_assets(cfg)
     out_dir = cfg["data"]["feature_store_dir"]
 
@@ -157,7 +179,7 @@ def run_policy_on_fold(
 
     engine = engine if engine is not None else BacktestEngine(config_path=config_path)
     return run_policy(price_returns, state_df, model, engine, config_path,
-                      deterministic=deterministic)
+                      deterministic=deterministic, combo=combo)
 
 
 def summarize(nav_df: pd.DataFrame, initial_nav: float) -> dict:

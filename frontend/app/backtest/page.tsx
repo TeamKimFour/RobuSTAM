@@ -1,7 +1,11 @@
 import TopNav from "../components/TopNav";
+import AllocationAreaChart from "./AllocationAreaChart";
 import AlphaChart from "./AlphaChart";
 import BenchmarkTable from "./BenchmarkTable";
 import BestWorstDaysCard from "./BestWorstDaysCard";
+import ComboComparisonTable from "./ComboComparisonTable";
+import ComboEquityOverlay from "./ComboEquityOverlay";
+import ComboFoldMatrix from "./ComboFoldMatrix";
 import ContributionChart from "./ContributionChart";
 import CorrelationHeatmap from "./CorrelationHeatmap";
 import ExtendedRiskCard from "./ExtendedRiskCard";
@@ -14,6 +18,7 @@ import RollingMetricsChart from "./RollingMetricsChart";
 import TurnoverChart from "./TurnoverChart";
 import UnderwaterCard from "./UnderwaterCard";
 import {
+  ALLOCATION_TIMESERIES,
   ASSET_CONTRIBUTION_SERIES,
   CORRELATION_MATRIX,
   CUM_COST_SERIES,
@@ -116,6 +121,15 @@ export default async function BacktestPage() {
           <UnderwaterCard durations={underwater} />
           <BestWorstDaysCard best={bw.best} worst={bw.worst} />
         </div>
+
+        <SectionLabel>피처 콤보 비교 (M0~M3 · full)</SectionLabel>
+        <ComboComparisonTable combos={snapshot.combos} />
+        <ComboEquityOverlay combos={snapshot.combos} />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          <ComboFoldMatrix combos={snapshot.combos} metric="sharpe" />
+          <ComboFoldMatrix combos={snapshot.combos} metric="mdd" />
+        </div>
+        <AllocationAreaChart data={ALLOCATION_TIMESERIES} />
 
         <footer
           style={{

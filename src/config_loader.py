@@ -16,6 +16,7 @@ State 차원 수식 (state_spec.md §2):
 자동으로 새 state_dim을 뽑아 환경·모델·API가 그대로 소비할 수 있다.
 """
 
+import sys
 from pathlib import Path
 
 from src.data import schema
@@ -193,6 +194,59 @@ def get_meta_db(cfg: dict, combo: str | None = None) -> str:
         return base
     p = Path(base)
     return str(p.parent / name / p.name)
+
+
+def load_config_for_combo(path: str = DEFAULT_CONFIG_PATH, combo: str | None = None) -> dict:
+    """config를 읽어 콤보를 반영한 dict를 반환한다 — 학습·백테스트 진입점용.
+
+    `resolve_combo`가 `features`(지표 리스트 → state_dim)를 바꾸는 데 더해, 이 함수는
+    `data.feature_store_dir`·`data.meta_db`까지 **그 콤보의 것으로 갈아끼운다.** 그래서
+    하위 모듈(PortfolioEnv·load_fold_env·run_policy_on_fold·feature_store)은 콤보라는
+    개념을 몰라도 되고, `cfg["data"]["feature_store_dir"]`를 읽던 기존 코드가 그대로
+    올바른 콤보의 Feature Store를 읽는다.
+
+    combo 생략 시 `active_combo`(기본 `full`)라 기존 동작과 완전히 동일하다.
+    """
+    return resolve_paths_for_combo(load_config(path), combo)
+
+
+def resolve_paths_for_combo(cfg: dict, combo: str | None = None) -> dict:
+    """이미 읽어둔 cfg에 콤보를 반영한다(`load_config_for_combo`의 dict 버전).
+
+    원본 cfg는 변경하지 않는다 — `data`도 새 dict로 복사한 뒤 경로만 덮어쓴다.
+    """
+    resolved = resolve_combo(cfg, combo)
+    resolved["data"] = {
+        **cfg.get("data", {}),
+        "feature_store_dir": get_feature_store_dir(cfg, combo),
+        "meta_db": get_meta_db(cfg, combo),
+    }
+    return resolved
+
+
+def force_utf8_stdout() -> None:
+    """콘솔 출력 인코딩을 UTF-8로 고정한다 (CLI 진입점에서만 호출).
+
+    Windows 기본 콘솔은 cp949라 MLflow가 http 트래킹 서버를 쓸 때 찍는 실행 URL 줄
+    (🏃 이모지 포함)에서 UnicodeEncodeError가 난다. 이 예외가 `mlflow.end_run()` 안의
+    `set_terminated` 도중에 터지면 **run이 RUNNING 상태로 남아** `select.py`의
+    `status='FINISHED'` 필터에서 통째로 빠진다 — 학습은 됐는데 배포 후보로 안 잡히는
+    조용한 실패라 진입점에서 미리 막는다.
+
+    라이브러리 사용(다른 모듈이 train()을 import해 쓰는 경우)에는 전역 상태를 건드리지
+    않도록 `__main__` 블록에서만 부른다.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
+def get_active_combo(cfg: dict, combo: str | None = None) -> str | None:
+    """이 cfg가 실제로 소비하는 콤보 이름(로깅·provenance용). 콤보 시스템이 없으면 None."""
+    if cfg.get("feature_combos") is None:
+        return None
+    return combo if combo is not None else cfg.get("active_combo")
 
 
 def get_state_dim(cfg: dict) -> int:

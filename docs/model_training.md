@@ -251,7 +251,102 @@ DQN MVP는 파이프라인 결선용이며, 성능 검증은 5주차 PPO(연속 
 
 ---
 
-## 8. 아직 정해지지 않은 것
+## 8. 피처 조합 실험 러너 (`src/models/experiment.py`)
+
+이슈 #34 Phase 2(피처 개선 본게임) 도현 과제(§8 6차 회의록: ① 후보만 학습 → ③ Fold1~3
+백테스트 → ④ 3지표 기록)를 push-button으로 잇는다. `config.yaml`의 `feature_combos`가
+정의한 콤보(`full`·M0~M3)를 각각 학습→백테스트하고 **3지표 판정**을 자동으로 낸다.
+
+조합 이름은 팀 공용 어휘(`docs/data_pipeline.md` §3-2, `screen_combos.py`의 `feature_set`)와
+동일하게 **M0~M3**를 쓴다 — 스크리닝 run과 학습 run을 같은 키로 이어붙이기 위함이다.
+
+### 8-1. 3지표 판정 (`judge_combo`, 순수 함수)
+
+세 지표는 상충하므로(λ↑ → 회전율↓지만 비중편차 붕괴) **관문 → 성과 2단계 AND**로 판정한다.
+
+- **관문(Gate)**: 먼저 통과해야 성과 판정 대상.
+  - 비중편차(자산별 평균비중 max−min) 3 fold 평균 ≥ `min_dispersion_mean`, 그리고 어느 fold도
+    ≥ `min_dispersion_any_fold` — 1/N 복제 배제(편차가 낮으면 샤프가 좋아도 균등비중 흉내).
+  - 회전율(일평균 L1) 3 fold 평균 ≤ `max_turnover_mean` — 과매매 배제.
+- **성과(Performance)**: 관문 통과분만. 주 기준 vs 1/N(가장 높은 벤치마크).
+  - 3 fold 중 `min_folds_beating_1n`개 이상에서 CLAUDE.md §1(샤프 +15% 또는 MDD 20% 방어) 달성.
+  - 최악 fold의 (policy − 1/N) 샤프 격차 ≥ `min_worst_sharpe_gap` — 단일 fold 요행·재앙 배제.
+
+기준값은 `Criteria` dataclass로 분리했고 **기본값 = 도현 회의 제안 초안**(λ 스윕 실측 근거:
+편차 0.05·회전율 0.30·2/3 fold·−0.10). **회의 확정 후 이 기본값만 바꾸면 된다.** 판정 로직은
+학습 없이 검증 가능하며 `tests/test_experiment.py`가 관문·성과·override를 박제한다.
+
+### 8-2. 오케스트레이션 (`run_experiment`)
+
+콤보별로 `train.train(combo=)` → `backtest.runner.run_fold(combo=)`(벤치마크 3종 비교) →
+`fold_metrics_from_run()`(비중편차·회전율·vs1/N 추출) → `judge_combo()` → JSON 기록.
+
+- **동일 조건 강제**: fold·seed·`total_timesteps`·λ·κ는 `ExperimentSettings`에 모아 **모든
+  콤보에 같은 값**으로 적용한다. 콤보 간 차이가 피처셋에서만 오게 하려는 것이라, 콤보별로
+  다른 학습 조건을 주는 인터페이스는 의도적으로 두지 않았다.
+- **비중편차**는 `backtest.policy`가 NAV DataFrame에 실어주는 자산별 비중 컬럼에서 계산한다
+  (`summarize()`엔 없는 값이라 러너가 보완).
+- **λ·κ**는 config 경유로 train split env에만 적용(개선안 A #60 · D #63). 기본 λ=10·κ=0.
+- **선행 확인**: 학습을 시작하기 전에 모든 콤보의 Feature Store build를 먼저 조회한다
+  (`combo_provenance`). 세 번째 콤보에서 없다는 걸 알게 돼 앞의 학습 시간을 버리지 않도록.
+- **provenance**: 콤보별 `build_run_id`·`state_dim`·지표 리스트를 결과 JSON에 남기고, 학습
+  run에는 MLflow 파라미터 `feature_set`·`state_dim`으로 기록한다.
+- **λ·κ는 인자로 전달**한다(`train(cost_multiplier=, vol_penalty_coef=)`). 로드된 cfg dict에
+  얹는 방식은 `train`이 config 파일을 다시 읽으므로 **조용히 무시된다.**
+
+#### test 지표를 학습 run에 되붙이기
+
+`train.py`는 valid split만 기록한다(학습 중 조기 확인용). 그런데 주간계획 기록 항목과 형우
+시각화(콤보별 fold 샤프·MDD·회전율·비중편차)가 요구하는 건 **test 지표**이고, 그 값은
+백테스트를 돌려야 나온다. 결과 JSON에만 남기면 팀 공용 MLflow만 보고는 콤보를 비교할 수
+없으므로, 백테스트 후 `MlflowClient`로 **그 fold를 학습한 run에 추가 기록**한다
+(`log_backtest_to_run`·`log_verdict_to_runs`).
+
+| 구분 | 키 |
+|---|---|
+| 성과 | `test_sharpe` · `test_total_return` · `test_mdd` · `test_avg_turnover` · `test_total_cost` |
+| 3지표 | `test_weight_dispersion` · `test_avg_turnover` · `test_sharpe` |
+| 대비 | `test_sharpe_gap_vs_1n` · `test_beats_1n` · `test_bench_{1n,60_40,bh}_{sharpe,mdd}` |
+| 판정 | `verdict_adopted` · `verdict_gate_passed` · `verdict_performance_passed` (metric) + `verdict`·`verdict_reasons` (tag) |
+
+학습 파라미터(fold·seed·λ·`state_dim`·`feature_store_run_id`)와 test 성적이 **한 run에** 있어야
+조인 없이 콤보 비교표를 만들 수 있어서, 별도 run을 만들지 않고 되붙이는 쪽을 택했다. 벤치마크
+샤프·MDD도 함께 남겨 소비 측이 백테스트를 재실행하지 않아도 되게 했다. `verdict_adopted`는
+metric(정렬·필터용)과 tag(UI 가독성) 양쪽에 넣는다.
+
+> ⚠️ 기본 `mlflow_tracking_uri`는 로컬 파일스토어(`mlruns`)다. 팀 공용 DB에 쌓으려면
+> `config.model.mlflow_tracking_uri`를 `http://localhost:5000`(로컬 Docker MLflow)으로 바꾼다.
+> 코드는 uri만 바뀌면 그대로 동작한다.
+
+### 8-3. 콤보 배선 (`train.py`·`policy.py`·`runner.py`)
+
+`build.py`는 콤보별 Feature Store를 만들 수 있었지만 **소비 측은 카논 6+2(=187)만 가정**하고
+있었다(PR #69가 "후속 작업: 도현"으로 남긴 부분). 이 배선의 핵심은 `config_loader`의
+`resolve_paths_for_combo(cfg, combo)` 하나다 — `features`(→`state_dim`)뿐 아니라
+`data.feature_store_dir`·`data.meta_db`까지 그 콤보 것으로 갈아끼운 새 cfg를 돌려준다.
+덕분에 `PortfolioEnv`·`load_fold_env`·`feature_store`는 **콤보 개념을 몰라도** 올바른
+Feature Store를 읽는다.
+
+명시적으로 고쳐야 했던 두 곳:
+
+| 위치 | 문제 | 조치 |
+|---|---|---|
+| `policy.run_policy` | `schema.feature_names(W)`를 카논 기본값으로 만들어 콤보 State를 **거부**했다 | 콤보의 지표 리스트로 기대 컬럼 생성 |
+| `policy.run_policy` | `schema.prev_weight_slice(W)`가 카논 기본값 — prev_weight 블록 시작 위치는 K_asset·K_market에 달려 있다 | 콤보의 지표 **개수**를 넘겨 슬라이스 계산 |
+
+`tests/test_combo_wiring.py`가 M1(D=166)에서 prev_weight가 `[161:166]`에 주입되는지,
+카논 기본 슬라이스로는 주입이 깨지는지를 함께 박제한다.
+
+**하위호환**: `combo`를 생략하면 `active_combo`(기본 `full`)라 기존 경로·차원·S3 run_id가
+그대로다. 백테스트 S3 run_id는 콤보를 쓸 때만 `M1_fold1_policy`처럼 접두어가 붙어,
+콤보끼리 결과를 덮어쓰지 않으면서 프론트·`export.py`가 기대하는 기존 키는 유지된다.
+
+관련: [`docs/issue34_proposal.md`](issue34_proposal.md) 개선안 A·D, 6차 회의록 §7(3지표 기준),
+[`docs/data_pipeline.md`](data_pipeline.md) §3-2(콤보 시스템).
+
+---
+
+## 9. 아직 정해지지 않은 것
 
 - **precompute 연동**: 학습된 `.zip`을 로드해 `docs/data_pipeline.md §8`의 latest.json을
   생성하는 스크립트 — `src/inference/precompute.py`로 구현 완료, 남은 건 §6 선택값을
@@ -268,3 +363,6 @@ DQN MVP는 파이프라인 결선용이며, 성능 검증은 5주차 PPO(연속 
 | v0.2 | 2026-07-15 | 이슈 #27: build `run_id` provenance 기록(MLflow `feature_store_run_id` 파라미터·모델 파일명 `ppo_fold<id>_<build_run_id>_<mlflow_run_id>.zip`). 배포 시 `config.inference.scaler_run_id`로 복사. |
 | v0.3 | 2026-07-18 | §7 추가: DQN MVP용 `DiscretePortfolioEnv` 어댑터(옵션 B, action_space=Discrete(9))·로짓 변환 계약·환경-에이전트 연결 스모크 테스트. |
 | v0.4 | 2026-07-18 | §6 추가: 배포 policy 선택 로직(`src/models/select.py`) — MLflow에서 `valid_sharpe` 최고 run 선택 → `config.inference` 값 출력. `evaluate`에 `valid_sharpe`(연율화 위험조정수익 proxy) 기록. `train.py --seed` 인자 추가(배포 후보 확장용). §5 RunPod 실행 절차 정정(`--fold-id 0`→`1`, 파드 내 `docker build` 불가·CPU 권장 명시). 미정 항목은 §8로 이동. |
+| v0.6 | 2026-08-09 | §8-3 신설: 피처 콤보(M0~M3)를 학습·백테스트까지 배선(PR #69가 남긴 "후속 작업: 도현"). `config_loader.resolve_paths_for_combo`로 features와 Feature Store 경로를 한 번에 전환, `train.py`/`runner.py`에 `--combo` 추가, `policy.run_policy`의 기대 컬럼·prev_weight 슬라이스를 콤보 차원으로 수정. `experiment.py`를 콤보 이름(M0~M3) 기반으로 재작성하고 `ExperimentSettings`로 fold·seed·학습량·λ·κ 동일 조건을 강제. MLflow에 `feature_set`·`state_dim` provenance 기록. `tests/test_combo_wiring.py` 8건 추가. |
+| v0.7 | 2026-08-09 | §8-2에 "test 지표 되붙이기" 추가: 백테스트 후 `MlflowClient`로 학습 run에 `test_sharpe`·`test_mdd`·`test_avg_turnover`·`test_weight_dispersion`·벤치마크 대비·판정 결과를 추가 기록(`log_backtest_to_run`·`log_verdict_to_runs`). 기존엔 valid 지표만 MLflow에 남고 test 쪽은 결과 JSON에만 있어, 형우 시각화·팀 비교가 로컬 파일에 의존했다. |
+| v0.5 | 2026-07-30 | §8 추가: 피처 조합 실험 러너(`src/models/experiment.py`) — 안 C 3조합 학습→백테스트→3지표 자동 판정. `judge_combo`(관문:비중편차·회전율 / 성과:vs1/N 샤프) 순수함수 + `Criteria`로 기준 분리(기본=도현 회의 초안). `tests/test_experiment.py` 13건. 실학습은 민지 재빌드 Feature Store 대기. 기존 §8→§9. |
