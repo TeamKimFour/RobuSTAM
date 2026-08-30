@@ -25,6 +25,11 @@ services:
         sync: false
       - key: AWS_SECRET_ACCESS_KEY
         sync: false
+      # Supabase Postgres 직접 연결 문자열(daily.yml GitHub Secret과 동일 값) — 서버 없이
+      # /models/runs·/models/deployed가 MlflowClient로 직접 조회한다. credential이라
+      # 레포엔 값 없이 키만 선언, Render 대시보드에서 직접 입력.
+      - key: MLFLOW_TRACKING_URI
+        sync: false
 
   - type: web
     name: robustam-mlflow
