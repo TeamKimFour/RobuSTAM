@@ -1,6 +1,12 @@
 import type { CSSProperties } from "react";
 import TopNav from "../components/TopNav";
 import DemoBadge from "../components/DemoBadge";
+import {
+  fetchDeployedModel,
+  fetchModelRuns,
+  type DeployedModel,
+  type ModelRun,
+} from "../lib/api";
 import LearningCurveChart from "./LearningCurveChart";
 import RunGridHeatmap from "./RunGridHeatmap";
 import { DEPLOYED_HYPERPARAMS, MLFLOW_RUNS } from "./mock";
@@ -19,9 +25,28 @@ const HEAD: CSSProperties = {
 };
 const CELL: CSSProperties = { padding: "12px 8px", fontSize: 13 };
 
-export default function ModelsPage() {
+export default async function ModelsPage() {
+  const [runsResult, deployedResult] = await Promise.all([
+    fetchModelRuns(),
+    fetchDeployedModel(),
+  ]);
+  const live = runsResult.ok && deployedResult.ok;
+
+  if (!runsResult.ok) {
+    console.warn("[models] /models/runs 조회 실패 — mock으로 대체:", runsResult.error.kind);
+  }
+  if (!deployedResult.ok) {
+    console.warn("[models] /models/deployed 조회 실패 — mock으로 대체:", deployedResult.error.kind);
+  }
+
   const sorted = [...MLFLOW_RUNS].sort((a, b) => b.validSharpe - a.validSharpe);
   const deployed = MLFLOW_RUNS.find((r) => r.deployed) ?? MLFLOW_RUNS[0];
+
+  // 각자 자기 .ok로 narrowing — live는 배지·분기 표시용 별도 boolean이라 이걸로는
+  // TS가 .data 존재를 좁혀주지 않는다.
+  const liveRuns: ModelRun[] = runsResult.ok ? [...runsResult.data] : [];
+  liveRuns.sort((a, b) => (b.valid_sharpe ?? -Infinity) - (a.valid_sharpe ?? -Infinity));
+  const liveDeployed: DeployedModel | null = deployedResult.ok ? deployedResult.data : null;
 
   return (
     <>
@@ -38,12 +63,18 @@ export default function ModelsPage() {
       >
         <header>
           <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, letterSpacing: "-0.02em" }}>
-            Models <DemoBadge>MLflow mock</DemoBadge>
+            Models <DemoBadge>{live ? "MLflow live" : "MLflow mock"}</DemoBadge>
           </h1>
           <p style={{ margin: "6px 0 0 0", color: "var(--muted)", fontSize: 13 }}>
-            학습 run 결과와 배포 모델 상세. MLflow API 프록시 전이라 값은 mock이지만,
-            <b> 필드 스키마는 train.py가 실제로 로깅하는 것과 1:1로 맞춰뒀다</b>
-            (표시되지 않는 것 = 아직 로깅 안 되는 것).
+            {live ? (
+              <>학습 run 결과와 배포 모델 상세 — <code>GET /models/runs</code>·<code>GET /models/deployed</code> 실데이터.</>
+            ) : (
+              <>
+                학습 run 결과와 배포 모델 상세. API 조회 실패로 값은 mock이지만,
+                <b> 필드 스키마는 train.py가 실제로 로깅하는 것과 1:1로 맞춰뒀다</b>
+                (표시되지 않는 것 = 아직 로깅 안 되는 것).
+              </>
+            )}
           </p>
         </header>
 
@@ -51,101 +82,33 @@ export default function ModelsPage() {
         <MissingMetricsBanner />
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 20 }}>
-          <DeployedCard runId={deployed.runId} sharpe={deployed.validSharpe} />
+          {live && liveDeployed ? (
+            <DeployedCard
+              runId={liveDeployed.run_id}
+              sharpe={liveDeployed.valid_sharpe}
+              modelVersion={liveDeployed.model_version}
+              modelPath={liveDeployed.model_path}
+              scalerFoldLabel={`Fold ${liveDeployed.scaler_fold_id}`}
+            />
+          ) : (
+            <DeployedCard
+              runId={deployed.runId}
+              sharpe={deployed.validSharpe}
+              modelVersion="ppo-fold1-50db7bc4"
+              modelPath="mlruns/models/ppo_fold1_b461...zip"
+              scalerFoldLabel="Fold 1"
+              featureSet="full"
+              stateDim="187"
+              featureStoreRunId="b461a86027e2"
+            />
+          )}
           <HyperparamsCard />
         </div>
 
         <LearningCurveChart />
         <RunGridHeatmap />
 
-        <section className="card">
-          <h2 className="card-title">실험 랭킹 (valid Sharpe 내림차순)</h2>
-          <p style={{ margin: "-8px 0 12px 0", fontSize: 12, color: "var(--muted)" }}>
-            컬럼은 <code>train.py::evaluate(split=&quot;valid&quot;)</code>가 MLflow에 남기는 metric 그대로다
-            (<code>valid_sharpe</code>·<code>valid_total_log_return</code>·
-            <code>valid_total_txn_cost</code>·<code>valid_avg_turnover</code>).
-          </p>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th style={HEAD}>#</th>
-                <th style={HEAD}>Run ID</th>
-                <th style={HEAD}>Feature Set</th>
-                <th style={HEAD}>Fold</th>
-                <th style={{ ...HEAD, textAlign: "right" }}>Seed</th>
-                <th style={{ ...HEAD, textAlign: "right" }}>Timesteps</th>
-                <th style={{ ...HEAD, textAlign: "right" }}>valid Sharpe</th>
-                <th style={{ ...HEAD, textAlign: "right" }}>valid log return</th>
-                <th style={{ ...HEAD, textAlign: "right" }}>valid turnover</th>
-                <th style={{ ...HEAD, textAlign: "right" }}>valid 거래비용</th>
-                <th style={HEAD}>배포</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map((r, i) => (
-                <tr
-                  key={r.runId}
-                  style={{
-                    borderBottom: "1px solid var(--border)",
-                    background: r.deployed ? "rgba(139,92,246,0.08)" : undefined,
-                  }}
-                >
-                  <td style={{ ...CELL, color: "var(--muted)" }}>{i + 1}</td>
-                  <td style={{ ...CELL, fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
-                    {r.runId}
-                  </td>
-                  <td style={{ ...CELL, fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
-                    {r.featureSet}
-                  </td>
-                  <td style={CELL}>Fold {r.fold}</td>
-                  <td style={{ ...CELL, textAlign: "right" }}>{r.seed}</td>
-                  <td style={{ ...CELL, textAlign: "right" }}>{r.timesteps.toLocaleString()}</td>
-                  <td
-                    style={{
-                      ...CELL,
-                      textAlign: "right",
-                      color: r.validSharpe >= 0 ? "var(--positive)" : "var(--negative)",
-                      fontWeight: 600,
-                    }}
-                  >
-                    {r.validSharpe.toFixed(2)}
-                  </td>
-                  <td
-                    style={{
-                      ...CELL,
-                      textAlign: "right",
-                      color: r.validTotalLogReturn >= 0 ? "var(--positive)" : "var(--negative)",
-                    }}
-                  >
-                    {(r.validTotalLogReturn * 100).toFixed(2)}%
-                  </td>
-                  <td style={{ ...CELL, textAlign: "right" }}>{r.validAvgTurnover.toFixed(3)}</td>
-                  <td style={{ ...CELL, textAlign: "right", color: "var(--sub)" }}>
-                    ${r.validTotalTxnCost.toLocaleString()}
-                  </td>
-                  <td style={CELL}>
-                    {r.deployed ? (
-                      <span
-                        style={{
-                          fontSize: 11,
-                          padding: "3px 8px",
-                          borderRadius: 999,
-                          background: "rgba(139,92,246,0.2)",
-                          color: "var(--accent)",
-                          fontWeight: 600,
-                        }}
-                      >
-                        DEPLOYED
-                      </span>
-                    ) : (
-                      <span style={{ color: "var(--sub)", fontSize: 12 }}>—</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
+        {live ? <LiveRunsSection runs={liveRuns} /> : <MockRunsSection rows={sorted} />}
 
         <footer style={{ textAlign: "center", color: "var(--sub)", fontSize: 12, marginTop: 24 }}>
           © 2026 RobuSTAM Quantitative RL System.
@@ -213,23 +176,45 @@ function MissingMetricsBanner() {
   );
 }
 
-function DeployedCard({ runId, sharpe }: { runId: string; sharpe: number }) {
+function DeployedCard({
+  runId,
+  sharpe,
+  modelVersion,
+  modelPath,
+  scalerFoldLabel,
+  featureSet,
+  stateDim,
+  featureStoreRunId,
+}: {
+  runId: string;
+  sharpe: number | null;
+  modelVersion: string;
+  modelPath: string;
+  scalerFoldLabel: string;
+  // GET /models/deployed는 feature_set·state_dim·feature_store_run_id를 안 내려준다
+  // (hyperparams 6개 키에 없음) — live일 땐 생략하고, mock일 때만 채워서 보여준다.
+  featureSet?: string;
+  stateDim?: string;
+  featureStoreRunId?: string;
+}) {
   return (
     <section className="card">
       <h2 className="card-title">현재 배포 모델</h2>
       <div style={{ display: "grid", gap: 12 }}>
         <Row label="Run ID" value={runId} mono />
-        <Row label="model_version" value="ppo-fold1-50db7bc4" mono />
-        <Row label="model_path" value="mlruns/models/ppo_fold1_b461...zip" mono small />
+        <Row label="model_version" value={modelVersion} mono />
+        <Row label="model_path" value={modelPath} mono small />
         <Row
           label="valid Sharpe"
-          value={sharpe.toFixed(2)}
-          tone={sharpe >= 0 ? "positive" : "negative"}
+          value={sharpe === null ? "—" : sharpe.toFixed(2)}
+          tone={sharpe === null ? undefined : sharpe >= 0 ? "positive" : "negative"}
         />
-        <Row label="feature_set" value="full" mono />
-        <Row label="state_dim" value="187" />
-        <Row label="scaler fold" value="Fold 1" />
-        <Row label="feature_store_run_id" value="b461a86027e2" mono />
+        {featureSet !== undefined && <Row label="feature_set" value={featureSet} mono />}
+        {stateDim !== undefined && <Row label="state_dim" value={stateDim} />}
+        <Row label="scaler fold" value={scalerFoldLabel} />
+        {featureStoreRunId !== undefined && (
+          <Row label="feature_store_run_id" value={featureStoreRunId} mono />
+        )}
       </div>
     </section>
   );
@@ -257,6 +242,184 @@ function HyperparamsCard() {
                 {h.value}
               </td>
               <td style={{ ...CELL, color: "var(--sub)", fontSize: 12 }}>{h.note ?? ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function MockRunsSection({ rows }: { rows: typeof MLFLOW_RUNS }) {
+  return (
+    <section className="card">
+      <h2 className="card-title">실험 랭킹 (valid Sharpe 내림차순)</h2>
+      <p style={{ margin: "-8px 0 12px 0", fontSize: 12, color: "var(--muted)" }}>
+        컬럼은 <code>train.py::evaluate(split=&quot;valid&quot;)</code>가 MLflow에 남기는 metric 그대로다
+        (<code>valid_sharpe</code>·<code>valid_total_log_return</code>·
+        <code>valid_total_txn_cost</code>·<code>valid_avg_turnover</code>).
+      </p>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={HEAD}>#</th>
+            <th style={HEAD}>Run ID</th>
+            <th style={HEAD}>Feature Set</th>
+            <th style={HEAD}>Fold</th>
+            <th style={{ ...HEAD, textAlign: "right" }}>Seed</th>
+            <th style={{ ...HEAD, textAlign: "right" }}>Timesteps</th>
+            <th style={{ ...HEAD, textAlign: "right" }}>valid Sharpe</th>
+            <th style={{ ...HEAD, textAlign: "right" }}>valid log return</th>
+            <th style={{ ...HEAD, textAlign: "right" }}>valid turnover</th>
+            <th style={{ ...HEAD, textAlign: "right" }}>valid 거래비용</th>
+            <th style={HEAD}>배포</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr
+              key={r.runId}
+              style={{
+                borderBottom: "1px solid var(--border)",
+                background: r.deployed ? "rgba(139,92,246,0.08)" : undefined,
+              }}
+            >
+              <td style={{ ...CELL, color: "var(--muted)" }}>{i + 1}</td>
+              <td style={{ ...CELL, fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
+                {r.runId}
+              </td>
+              <td style={{ ...CELL, fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
+                {r.featureSet}
+              </td>
+              <td style={CELL}>Fold {r.fold}</td>
+              <td style={{ ...CELL, textAlign: "right" }}>{r.seed}</td>
+              <td style={{ ...CELL, textAlign: "right" }}>{r.timesteps.toLocaleString()}</td>
+              <td
+                style={{
+                  ...CELL,
+                  textAlign: "right",
+                  color: r.validSharpe >= 0 ? "var(--positive)" : "var(--negative)",
+                  fontWeight: 600,
+                }}
+              >
+                {r.validSharpe.toFixed(2)}
+              </td>
+              <td
+                style={{
+                  ...CELL,
+                  textAlign: "right",
+                  color: r.validTotalLogReturn >= 0 ? "var(--positive)" : "var(--negative)",
+                }}
+              >
+                {(r.validTotalLogReturn * 100).toFixed(2)}%
+              </td>
+              <td style={{ ...CELL, textAlign: "right" }}>{r.validAvgTurnover.toFixed(3)}</td>
+              <td style={{ ...CELL, textAlign: "right", color: "var(--sub)" }}>
+                ${r.validTotalTxnCost.toLocaleString()}
+              </td>
+              <td style={CELL}>
+                {r.deployed ? (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      padding: "3px 8px",
+                      borderRadius: 999,
+                      background: "rgba(139,92,246,0.2)",
+                      color: "var(--accent)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    DEPLOYED
+                  </span>
+                ) : (
+                  <span style={{ color: "var(--sub)", fontSize: 12 }}>—</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+/**
+ * 실데이터(GET /models/runs) 전용 랭킹 테이블 — MissingMetricsBanner와 같은 이유로,
+ * 백엔드가 안 내려주는 feature_set·valid_total_log_return·valid_avg_turnover·
+ * valid_total_txn_cost 컬럼은 짐작으로 채우지 않고 아예 뺐다(Mock 표와 컬럼 수가 다른
+ * 이유). status는 MLflow RunStatus 원문(FINISHED/FAILED/RUNNING 등)을 그대로 보여준다.
+ */
+function LiveRunsSection({ runs }: { runs: ModelRun[] }) {
+  return (
+    <section className="card">
+      <h2 className="card-title">실험 랭킹 (valid Sharpe 내림차순)</h2>
+      <p style={{ margin: "-8px 0 12px 0", fontSize: 12, color: "var(--muted)" }}>
+        <code>GET /models/runs</code> 실데이터. feature_set·valid log return·turnover·거래비용은
+        아직 MLflow에 로깅되지 않아 표에서 뺐다.
+      </p>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={HEAD}>#</th>
+            <th style={HEAD}>Run ID</th>
+            <th style={HEAD}>Fold</th>
+            <th style={{ ...HEAD, textAlign: "right" }}>Seed</th>
+            <th style={{ ...HEAD, textAlign: "right" }}>Timesteps</th>
+            <th style={{ ...HEAD, textAlign: "right" }}>valid Sharpe</th>
+            <th style={HEAD}>Status</th>
+            <th style={HEAD}>배포</th>
+          </tr>
+        </thead>
+        <tbody>
+          {runs.map((r, i) => (
+            <tr
+              key={r.run_id}
+              style={{
+                borderBottom: "1px solid var(--border)",
+                background: r.deployed ? "rgba(139,92,246,0.08)" : undefined,
+              }}
+            >
+              <td style={{ ...CELL, color: "var(--muted)" }}>{i + 1}</td>
+              <td style={{ ...CELL, fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
+                {r.run_id}
+              </td>
+              <td style={CELL}>Fold {r.fold_id}</td>
+              <td style={{ ...CELL, textAlign: "right" }}>{r.seed}</td>
+              <td style={{ ...CELL, textAlign: "right" }}>{r.total_timesteps.toLocaleString()}</td>
+              <td
+                style={{
+                  ...CELL,
+                  textAlign: "right",
+                  color:
+                    r.valid_sharpe === null
+                      ? "var(--text)"
+                      : r.valid_sharpe >= 0
+                        ? "var(--positive)"
+                        : "var(--negative)",
+                  fontWeight: 600,
+                }}
+              >
+                {r.valid_sharpe === null ? "—" : r.valid_sharpe.toFixed(2)}
+              </td>
+              <td style={{ ...CELL, color: "var(--sub)", fontSize: 12 }}>{r.status}</td>
+              <td style={CELL}>
+                {r.deployed ? (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      padding: "3px 8px",
+                      borderRadius: 999,
+                      background: "rgba(139,92,246,0.2)",
+                      color: "var(--accent)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    DEPLOYED
+                  </span>
+                ) : (
+                  <span style={{ color: "var(--sub)", fontSize: 12 }}>—</span>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
