@@ -48,13 +48,24 @@ Vercel 배포 대상 대시보드. Plotly.js로 자산 비중·성과곡선을 �
 - **데이터 소스 배지**: 상단 우측에 실데이터/mock 여부·생성 시각 표시.
 - 시연용 mock은 `app/backtest/mock.ts`에서 결정론적으로 파생(seed 고정). `python -m src.backtest.export` 실행 시 `public/backtest.json`이 생성돼 자동으로 실데이터로 교체된다.
 
-### `/models` — MLflow 대시(mock)
+### `/models` — MLflow 대시 (mock, 스키마는 train.py와 1:1)
 
-- 배포 모델 카드(run_id, model_version, config_hash, scaler fold).
-- 배포 하이퍼파라미터(PPO, learning_rate, gamma, GAE 등).
-- 학습 곡선(reward·entropy·KL).
-- Fold × Seed × Timesteps 그리드 히트맵.
-- 12개 run 랭킹표. 이슈 #34(과매매로 valid Sharpe 음수) 경고 배너 상단 노출.
+**원칙**: 이 페이지에 표시되는 모든 필드는 `src/models/train.py`가 실제로 MLflow에
+로깅하는 항목과 1:1로 대응한다. 로깅되지 않는 값은 **표시하지 않고 배너로 명시적으로
+안내**한다 (mock으로 위장하지 않음).
+
+- **배포 모델 카드**: `run_id`·`model_version`·`model_path`·`valid_sharpe`·`feature_set`·
+  `state_dim`·scaler fold·`feature_store_run_id`.
+- **배포 파라미터 표** (`train.py::log_params` 그대로): `algorithm`·`policy`·`feature_set`·
+  `state_dim`·`window`·`transaction_cost`·`total_timesteps`·`train_cost_multiplier`(λ)·
+  `vol_penalty_coef`(κ)·`learning_rate`·`seed`.
+- **실험 랭킹 표**: `valid_sharpe`·`valid_total_log_return`·`valid_avg_turnover`·
+  `valid_total_txn_cost` (모두 `evaluate(split="valid")` 반환값).
+- **Fold × Seed × Timesteps 히트맵**: `valid_sharpe` 기준.
+- **경고 배너 2종**: ①이슈 #34 배포 정책 valid Sharpe 음수 · ②MLflow 로깅 미배선 안내
+  (valid MDD, test Sharpe, 학습 곡선 3종 — 도현 담당 회의 안건).
+- **학습 곡선 카드**: 현재 "미배선" 안내 카드 (SB3 `model.learn()`에 MLflow 콜백이
+  붙으면 원래 3축 차트로 복원).
 
 
 ## API 계약
