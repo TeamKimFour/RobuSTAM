@@ -41,11 +41,14 @@ export default function ModelsPage() {
             Models <DemoBadge>MLflow mock</DemoBadge>
           </h1>
           <p style={{ margin: "6px 0 0 0", color: "var(--muted)", fontSize: 13 }}>
-            12개 학습 run 결과와 배포 모델 상세. MLflow API 프록시 전이라 값은 mock.
+            학습 run 결과와 배포 모델 상세. MLflow API 프록시 전이라 값은 mock이지만,
+            <b> 필드 스키마는 train.py가 실제로 로깅하는 것과 1:1로 맞춰뒀다</b>
+            (표시되지 않는 것 = 아직 로깅 안 되는 것).
           </p>
         </header>
 
         <WarningBanner />
+        <MissingMetricsBanner />
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 20 }}>
           <DeployedCard runId={deployed.runId} sharpe={deployed.validSharpe} />
@@ -57,17 +60,24 @@ export default function ModelsPage() {
 
         <section className="card">
           <h2 className="card-title">실험 랭킹 (valid Sharpe 내림차순)</h2>
+          <p style={{ margin: "-8px 0 12px 0", fontSize: 12, color: "var(--muted)" }}>
+            컬럼은 <code>train.py::evaluate(split=&quot;valid&quot;)</code>가 MLflow에 남기는 metric 그대로다
+            (<code>valid_sharpe</code>·<code>valid_total_log_return</code>·
+            <code>valid_total_txn_cost</code>·<code>valid_avg_turnover</code>).
+          </p>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={HEAD}>#</th>
                 <th style={HEAD}>Run ID</th>
+                <th style={HEAD}>Feature Set</th>
                 <th style={HEAD}>Fold</th>
                 <th style={{ ...HEAD, textAlign: "right" }}>Seed</th>
                 <th style={{ ...HEAD, textAlign: "right" }}>Timesteps</th>
                 <th style={{ ...HEAD, textAlign: "right" }}>valid Sharpe</th>
-                <th style={{ ...HEAD, textAlign: "right" }}>valid MDD</th>
-                <th style={{ ...HEAD, textAlign: "right" }}>test Sharpe</th>
+                <th style={{ ...HEAD, textAlign: "right" }}>valid log return</th>
+                <th style={{ ...HEAD, textAlign: "right" }}>valid turnover</th>
+                <th style={{ ...HEAD, textAlign: "right" }}>valid 거래비용</th>
                 <th style={HEAD}>배포</th>
               </tr>
             </thead>
@@ -84,6 +94,9 @@ export default function ModelsPage() {
                   <td style={{ ...CELL, fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
                     {r.runId}
                   </td>
+                  <td style={{ ...CELL, fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
+                    {r.featureSet}
+                  </td>
                   <td style={CELL}>Fold {r.fold}</td>
                   <td style={{ ...CELL, textAlign: "right" }}>{r.seed}</td>
                   <td style={{ ...CELL, textAlign: "right" }}>{r.timesteps.toLocaleString()}</td>
@@ -97,17 +110,18 @@ export default function ModelsPage() {
                   >
                     {r.validSharpe.toFixed(2)}
                   </td>
-                  <td style={{ ...CELL, textAlign: "right", color: "var(--negative)" }}>
-                    {(r.validMdd * 100).toFixed(1)}%
-                  </td>
                   <td
                     style={{
                       ...CELL,
                       textAlign: "right",
-                      color: r.testSharpe >= 0 ? "var(--positive)" : "var(--negative)",
+                      color: r.validTotalLogReturn >= 0 ? "var(--positive)" : "var(--negative)",
                     }}
                   >
-                    {r.testSharpe.toFixed(2)}
+                    {(r.validTotalLogReturn * 100).toFixed(2)}%
+                  </td>
+                  <td style={{ ...CELL, textAlign: "right" }}>{r.validAvgTurnover.toFixed(3)}</td>
+                  <td style={{ ...CELL, textAlign: "right", color: "var(--sub)" }}>
+                    ${r.validTotalTxnCost.toLocaleString()}
                   </td>
                   <td style={CELL}>
                     {r.deployed ? (
@@ -161,6 +175,44 @@ function WarningBanner() {
   );
 }
 
+/**
+ * MLflow에 아직 로깅되지 않는 지표를 UI 소비자에게 명시적으로 알리는 배너.
+ * 팀 회의(도현 담당 영역)에서 조율될 예정이며, 확정 시 이 배너를 제거하고 해당
+ * 컬럼·차트를 되살린다.
+ */
+function MissingMetricsBanner() {
+  return (
+    <div
+      style={{
+        padding: "12px 16px",
+        background: "rgba(148,163,184,0.06)",
+        border: "1px dashed rgba(148,163,184,0.3)",
+        color: "var(--sub)",
+        borderRadius: 8,
+        fontSize: 12,
+        lineHeight: 1.6,
+      }}
+    >
+      <b style={{ color: "var(--text)" }}>MLflow 로깅 미배선(도현 담당 · 회의 안건):</b> 아래 3종은
+      현재 <code>train.py</code>가 남기지 않아 이 대시보드에도 표시하지 않습니다.
+      <ul style={{ margin: "6px 0 0 0", paddingLeft: 18 }}>
+        <li>
+          <b>valid MDD</b> — <code>evaluate()</code>가 log_return/sharpe/txn_cost/turnover만
+          계산합니다. MDD 계산 로직 자체가 없어요.
+        </li>
+        <li>
+          <b>test Sharpe</b> — <code>evaluate()</code>가 학습 중 <code>split=&quot;valid&quot;</code>로만
+          호출됩니다. test split 평가 코드가 없어요.
+        </li>
+        <li>
+          <b>학습 곡선 (step별 reward/entropy/KL)</b> — SB3 <code>model.learn()</code>에 MLflow
+          콜백이 안 걸려 있어 스텝별 학습 로그가 기록되지 않습니다.
+        </li>
+      </ul>
+    </div>
+  );
+}
+
 function DeployedCard({ runId, sharpe }: { runId: string; sharpe: number }) {
   return (
     <section className="card">
@@ -174,8 +226,10 @@ function DeployedCard({ runId, sharpe }: { runId: string; sharpe: number }) {
           value={sharpe.toFixed(2)}
           tone={sharpe >= 0 ? "positive" : "negative"}
         />
+        <Row label="feature_set" value="full" mono />
+        <Row label="state_dim" value="187" />
         <Row label="scaler fold" value="Fold 1" />
-        <Row label="config hash" value="b461a860" mono />
+        <Row label="feature_store_run_id" value="b461a86027e2" mono />
       </div>
     </section>
   );
@@ -184,12 +238,14 @@ function DeployedCard({ runId, sharpe }: { runId: string; sharpe: number }) {
 function HyperparamsCard() {
   return (
     <section className="card">
-      <h2 className="card-title">배포 모델 하이퍼파라미터</h2>
+      <h2 className="card-title">배포 모델 파라미터 (train.py MLflow log_params)</h2>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <tbody>
           {DEPLOYED_HYPERPARAMS.map((h) => (
             <tr key={h.key} style={{ borderBottom: "1px solid var(--border)" }}>
-              <td style={{ ...CELL, color: "var(--muted)", width: 150 }}>{h.key}</td>
+              <td style={{ ...CELL, color: "var(--muted)", width: 200, fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
+                {h.key}
+              </td>
               <td
                 style={{
                   ...CELL,
