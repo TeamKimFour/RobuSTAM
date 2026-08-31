@@ -57,3 +57,32 @@ export function fetchLatestInference(): Promise<ApiResult<LatestInference>> {
 export function fetchHealth(): Promise<ApiResult<{ status: string }>> {
   return requestJson<{ status: string }>("/health");
 }
+
+// src/api/schemas.py ModelRun/DeployedModel과 필드명 그대로(snake_case) — 백엔드 응답을
+// 변형 없이 받는다. validMdd·testSharpe는 백엔드가 아예 내려주지 않는 값이라 여기도 없다.
+export type ModelRun = {
+  run_id: string;
+  fold_id: number;
+  seed: number;
+  total_timesteps: number;
+  valid_sharpe: number | null;
+  status: string;
+  deployed: boolean;
+};
+
+export type DeployedModel = {
+  run_id: string;
+  model_version: string;
+  model_path: string;
+  scaler_fold_id: number;
+  valid_sharpe: number | null;
+  hyperparams: Record<string, string>;
+};
+
+export function fetchModelRuns(): Promise<ApiResult<ModelRun[]>> {
+  return requestJson<ModelRun[]>("/models/runs");
+}
+
+export function fetchDeployedModel(): Promise<ApiResult<DeployedModel>> {
+  return requestJson<DeployedModel>("/models/deployed");
+}
